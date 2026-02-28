@@ -1,0 +1,5 @@
+{
+  "name": "Prosopopus v2",
+  "description": "High-performance vector design application with N-dimensional interpolation and state-based animation.",
+  "requestFramePermissions": []
+}
