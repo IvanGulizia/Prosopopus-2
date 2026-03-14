@@ -2,6 +2,7 @@
 import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment } from '../utils/math';
+import { resolveStrokeStyle } from '../utils/style';
 import { Point } from '../types';
 import { APP_COLORS } from '../constants';
 
@@ -95,8 +96,9 @@ export const Canvas: React.FC = () => {
     const handleResize = () => {
       if (!containerRef.current) return;
       const { width: contW, height: contH } = containerRef.current.getBoundingClientRect();
-      const margin = 80;
-      const newScale = Math.min((contW - margin) / CANVAS_WIDTH, (contH - margin) / CANVAS_HEIGHT, 1);
+      const marginX = 120;
+      const marginY = 240;
+      const newScale = Math.min((contW - marginX) / CANVAS_WIDTH, (contH - marginY) / CANVAS_HEIGHT, 1);
       setScale(Math.max(0.1, newScale));
     };
     window.addEventListener('resize', handleResize);
@@ -458,14 +460,34 @@ export const Canvas: React.FC = () => {
         } else if (interactionModeRef.current === 'resizing' && activeHandle) {
             const unrotatedMouse = rotatePoint(p, transformStart.center, -transformStart.angle);
             const unrotatedStart = rotatePoint(transformStart.mouse, transformStart.center, -transformStart.angle);
-            let dx = unrotatedMouse.x - unrotatedStart.x; let dy = unrotatedMouse.y - unrotatedStart.y;
-            if (e.shiftKey) { const aspect = transformStart.width / transformStart.height; dy = (activeHandle === 'br' || activeHandle === 'tl') ? dx / aspect : -dx / aspect; }
-            if (ui.snapToGrid && !e.shiftKey) { dx = Math.round(dx / ui.gridSize) * ui.gridSize; dy = Math.round(dy / ui.gridSize) * ui.gridSize; }
-            let newW = transformStart.width; let newH = transformStart.height;
-            if (activeHandle === 'br') { newW += dx * 2; newH += dy * 2; }
-            if (activeHandle === 'tl') { newW -= dx * 2; newH -= dy * 2; }
-            if (activeHandle === 'tr') { newW += dx * 2; newH -= dy * 2; }
-            if (activeHandle === 'bl') { newW -= dx * 2; newH += dy * 2; }
+            let dx = unrotatedMouse.x - unrotatedStart.x; 
+            let dy = unrotatedMouse.y - unrotatedStart.y;
+            
+            if (e.shiftKey) { 
+                const aspect = transformStart.width / transformStart.height; 
+                dy = (activeHandle === 'br' || activeHandle === 'tl') ? dx / aspect : -dx / aspect; 
+            }
+            if (ui.snapToGrid && !e.shiftKey) { 
+                dx = Math.round(dx / ui.gridSize) * ui.gridSize; 
+                dy = Math.round(dy / ui.gridSize) * ui.gridSize; 
+            }
+
+            let newW = transformStart.width; 
+            let newH = transformStart.height;
+            let dcx = 0; // delta center x in unrotated space
+            let dcy = 0; // delta center y in unrotated space
+
+            if (!e.altKey) {
+                if (activeHandle === 'br') { newW += dx * 2; newH += dy * 2; }
+                if (activeHandle === 'tl') { newW -= dx * 2; newH -= dy * 2; }
+                if (activeHandle === 'tr') { newW += dx * 2; newH -= dy * 2; }
+                if (activeHandle === 'bl') { newW -= dx * 2; newH += dy * 2; }
+            } else {
+                if (activeHandle === 'br') { newW += dx; newH += dy; dcx = dx / 2; dcy = dy / 2; }
+                if (activeHandle === 'tl') { newW -= dx; newH -= dy; dcx = dx / 2; dcy = dy / 2; }
+                if (activeHandle === 'tr') { newW += dx; newH -= dy; dcx = dx / 2; dcy = dy / 2; }
+                if (activeHandle === 'bl') { newW -= dx; newH += dy; dcx = dx / 2; dcy = dy / 2; }
+            }
             
             if (e.shiftKey && ui.snapScale) {
                 const SCALE_SNAP_STEP = 0.25;
@@ -481,12 +503,52 @@ export const Canvas: React.FC = () => {
                 snappedScaleX = Math.max(MIN_SCALE, Math.min(MAX_SCALE, snappedScaleX));
                 snappedScaleY = Math.max(MIN_SCALE, Math.min(MAX_SCALE, snappedScaleY));
                 
-                newW = transformStart.width * snappedScaleX;
-                newH = transformStart.height * snappedScaleY;
+                const snappedW = transformStart.width * snappedScaleX;
+                const snappedH = transformStart.height * snappedScaleY;
+                
+                // Adjust dcx and dcy based on the snapped width/height difference
+                if (e.altKey) {
+                    const diffW = snappedW - newW;
+                    const diffH = snappedH - newH;
+                    if (activeHandle === 'br') { dcx += diffW / 2; dcy += diffH / 2; }
+                    if (activeHandle === 'tl') { dcx -= diffW / 2; dcy -= diffH / 2; }
+                    if (activeHandle === 'tr') { dcx += diffW / 2; dcy -= diffH / 2; }
+                    if (activeHandle === 'bl') { dcx -= diffW / 2; dcy += diffH / 2; }
+                }
+                newW = snappedW;
+                newH = snappedH;
             }
 
-            newW = Math.max(1, newW); newH = Math.max(1, newH);
-            setSelectionBounds({ ...selectionBounds, width: newW, height: newH });
+            if (newW < 1) {
+                const diffW = 1 - newW;
+                newW = 1;
+                if (e.altKey) {
+                    if (activeHandle === 'br' || activeHandle === 'tr') dcx += diffW / 2;
+                    if (activeHandle === 'tl' || activeHandle === 'bl') dcx -= diffW / 2;
+                }
+            }
+            if (newH < 1) {
+                const diffH = 1 - newH;
+                newH = 1;
+                if (e.altKey) {
+                    if (activeHandle === 'br' || activeHandle === 'bl') dcy += diffH / 2;
+                    if (activeHandle === 'tl' || activeHandle === 'tr') dcy -= diffH / 2;
+                }
+            }
+
+            const rotatedCenter = rotatePoint(
+                { x: transformStart.center.x + dcx, y: transformStart.center.y + dcy }, 
+                transformStart.center, 
+                transformStart.angle
+            );
+
+            setSelectionBounds({ 
+                ...selectionBounds, 
+                width: newW, 
+                height: newH,
+                cx: rotatedCenter.x,
+                cy: rotatedCenter.y
+            });
         }
         return;
     }
@@ -691,7 +753,15 @@ export const Canvas: React.FC = () => {
         const strokeData = activeKeyframes.map(kf => {
             const state = kf.layerStates.find(ls => ls.layerId === layer.id);
             const s = state?.strokes[0]; 
-            return { weight: kf.weight, points: s?.points, style: s, color: s?.color || 'none', fillColor: s?.fillColor, width: s?.width || 1 };
+            const resolvedStyle = resolveStrokeStyle(s, layer);
+            return { 
+                weight: kf.weight, 
+                points: s?.points, 
+                style: s, 
+                color: resolvedStyle.strokeColor, 
+                fillColor: resolvedStyle.fillColor, 
+                width: resolvedStyle.strokeWidth 
+            };
         });
 
         const sortedByWeight = [...strokeData].sort((a,b) => b.weight - a.weight);
@@ -892,7 +962,7 @@ export const Canvas: React.FC = () => {
   return (
     <div 
       ref={containerRef} 
-      className="absolute inset-0 z-0 flex items-center justify-center bg-[#EAEAEA] touch-none"
+      className="absolute inset-0 z-0 flex items-start justify-center pt-28 pb-32 bg-[#EAEAEA] touch-none"
     >
       <div 
         style={{ 

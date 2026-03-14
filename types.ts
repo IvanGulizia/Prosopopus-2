@@ -13,16 +13,20 @@ export interface Size {
 }
 
 // --- Vector Elements ---
-export type StrokeStyle = 'solid' | 'dashed' | 'dotted';
+export type LineStyle = 'solid' | 'dashed' | 'dotted';
+
+export interface StyleProps {
+  strokeColor: string | 'none';
+  strokeWidth: number;
+  fillColor: string | 'none';
+  lineStyle: LineStyle;
+}
 
 export interface Stroke {
   id: string;
   points: Point[];
-  color: string;
-  width: number;
-  style: StrokeStyle;
   closed: boolean; // True for shapes, false for lines
-  fillColor?: string; // Optional fill (if undefined/null, no fill)
+  style?: Partial<StyleProps>; // Overrides for this specific stroke state
 }
 
 // --- Layers ---
@@ -38,6 +42,7 @@ export interface Layer {
   opacity: number;
   interpolationMode: InterpolationMode; // Per-layer setting
   cornerRoundness: number; // 0 to 100, controls visual corner rounding
+  baseStyle?: StyleProps; // The default style for strokes in this layer
 }
 
 // --- Axes & Keyframes (The Interpolation Engine) ---

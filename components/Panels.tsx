@@ -281,7 +281,8 @@ export const SettingsPanel: React.FC = () => {
       setResolutionScale, togglePerformanceMode,
       togglePlayModePhysics, setSpringStiffness, setSpringDamping,
       setLayerCornerRoundness, setStrokeCap,
-      updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth
+      updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
+      updateCanvasSize
   } = useStore();
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -429,6 +430,23 @@ export const SettingsPanel: React.FC = () => {
             isOpen={openSections.includes('canvas-guides')}
             onToggle={() => toggleSection('canvas-guides')}
         >
+            <div className="space-y-4 mb-4">
+                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-3">
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block">Dimensions</label>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => updateCanvasSize(600, 600)} className={`py-1.5 text-xs font-medium rounded-lg border ${project.canvasSize.width === 600 && project.canvasSize.height === 600 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>1:1 Square</button>
+                        <button onClick={() => updateCanvasSize(1280, 720)} className={`py-1.5 text-xs font-medium rounded-lg border ${project.canvasSize.width === 1280 && project.canvasSize.height === 720 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>16:9 Video</button>
+                        <button onClick={() => updateCanvasSize(800, 600)} className={`py-1.5 text-xs font-medium rounded-lg border ${project.canvasSize.width === 800 && project.canvasSize.height === 600 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>4:3 Classic</button>
+                        <button onClick={() => updateCanvasSize(720, 1280)} className={`py-1.5 text-xs font-medium rounded-lg border ${project.canvasSize.width === 720 && project.canvasSize.height === 1280 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>9:16 Vertical</button>
+                    </div>
+                    <div className="flex gap-2 items-center mt-2">
+                        <input type="number" value={project.canvasSize.width} onChange={(e) => updateCanvasSize(parseInt(e.target.value) || 600, project.canvasSize.height)} className="w-full bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700" placeholder="Width" />
+                        <span className="text-gray-400 text-xs">x</span>
+                        <input type="number" value={project.canvasSize.height} onChange={(e) => updateCanvasSize(project.canvasSize.width, parseInt(e.target.value) || 600)} className="w-full bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700" placeholder="Height" />
+                    </div>
+                </div>
+            </div>
+
             <div className="bg-gray-50 rounded-xl p-3 space-y-3 border border-gray-100">
                 <SettingsToggle label="Show Grid" active={ui.showGrid} onClick={toggleGrid} />
                 

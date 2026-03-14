@@ -84,7 +84,8 @@ interface StoreState {
   selectLayer: (layerId: string) => void;
   
   updateAxisValue: (axisId: string, value: number) => void;
-  updateMultipleAxisValues: (values: Record<string, number>) => void; // Batch update
+  updateMultipleAxisValues: (values: Record<string, number>) => void;
+  updateCanvasSize: (width: number, height: number) => void; // Batch update
   
   addStrokeToCurrentKeyframe: (points: Point[], closed?: boolean, skipSimplify?: boolean) => void; 
   updateStrokeInCurrentKeyframe: (strokeId: string, newPoints: Point[]) => void;
@@ -103,17 +104,30 @@ interface StoreState {
   selectStroke: (strokeId: string | null) => void;
 }
 
+import { resolveStrokeStyle } from '../utils/style';
+
 const MAX_HISTORY = 50;
 
 // HELPER: Extract UI properties (color, width) from the current selection context
 const getHydratedUIProps = (project: Project, layerId: string | null, kfId: string | null, strokeId: string | null): Partial<UIState> => {
     if (!layerId || !kfId) return {};
 
+    const layer = project.layers.find(l => l.id === layerId);
+    if (!layer) return {};
+
     const kf = project.keyframes.find(k => k.id === kfId);
     if (!kf) return {};
 
     const layerState = kf.layerStates.find(ls => ls.layerId === layerId);
-    if (!layerState || layerState.strokes.length === 0) return {};
+    if (!layerState || layerState.strokes.length === 0) {
+        // Fallback to layer base style if no strokes exist
+        const style = resolveStrokeStyle(undefined, layer);
+        return {
+            brushColor: style.strokeColor,
+            fillColor: style.fillColor,
+            brushSize: style.strokeWidth
+        };
+    }
 
     // Determine which stroke to read from
     let targetStroke = layerState.strokes[0]; // Default to first
@@ -122,10 +136,12 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
         if (found) targetStroke = found;
     }
 
+    const style = resolveStrokeStyle(targetStroke, layer);
+
     return {
-        brushColor: targetStroke.color,
-        fillColor: targetStroke.fillColor || 'none',
-        brushSize: targetStroke.width
+        brushColor: style.strokeColor,
+        fillColor: style.fillColor,
+        brushSize: style.strokeWidth
     };
 };
 
@@ -256,45 +272,35 @@ export const useStore = create<StoreState>((set, get) => ({
   setBrushColor: (color) => set((state) => {
     // 1. Update UI (Source of Truth for next stroke)
     const newUI = { ...state.ui, brushColor: color };
-    const strokeColor = color === 'none' ? 'rgba(0,0,0,0)' : color;
+    const strokeColor = color === 'none' ? 'none' : color;
 
-    // 2. Deep Update if Object Selected or if we have a current layer
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
-        let targetId = state.ui.selectedStrokeId;
-        
-        // If no stroke is selected, try to find the first stroke in the current layer
-        if (!targetId) {
-            const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
-            const ls = kf?.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
-            if (ls && ls.strokes.length > 0) {
-                targetId = ls.strokes[0].id;
-            }
-        }
+    // 2. Deep Update if Object Selected
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+        const targetId = state.ui.selectedStrokeId;
+        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
-        if (targetId) {
-            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-
-            const newKeyframes = state.project.keyframes.map(kf => {
-                if (kf.id !== state.ui.selectedKeyframeId) return kf;
-                return {
-                    ...kf,
-                    layerStates: kf.layerStates.map(ls => ({
-                        ...ls,
-                        strokes: ls.strokes.map(s => {
-                            // Update only matching ID
-                            if (s.id === targetId) return { ...s, color: strokeColor };
-                            return s;
-                        })
-                    }))
-                };
-            });
-
-            return { 
-               ui: newUI, 
-               project: { ...state.project, keyframes: newKeyframes },
-               history: { past, future: [] }
+        const newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== state.ui.selectedKeyframeId) return kf;
+            return {
+                ...kf,
+                layerStates: kf.layerStates.map(ls => ({
+                    ...ls,
+                    strokes: ls.strokes.map(s => {
+                        // Update only matching ID
+                        if (s.id === targetId) {
+                            return { ...s, style: { ...s.style, strokeColor } };
+                        }
+                        return s;
+                    })
+                }))
             };
-        }
+        });
+
+        return { 
+           ui: newUI, 
+           project: { ...state.project, keyframes: newKeyframes },
+           history: { past, future: [] }
+        };
     }
 
     return { ui: newUI };
@@ -303,40 +309,31 @@ export const useStore = create<StoreState>((set, get) => ({
   setFillColor: (color) => set((state) => {
     const newUI = { ...state.ui, fillColor: color };
     
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
-        let targetId = state.ui.selectedStrokeId;
-        
-        if (!targetId) {
-            const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
-            const ls = kf?.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
-            if (ls && ls.strokes.length > 0) {
-                targetId = ls.strokes[0].id;
-            }
-        }
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+        const targetId = state.ui.selectedStrokeId;
+        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
-        if (targetId) {
-            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-
-            const newKeyframes = state.project.keyframes.map(kf => {
-                if (kf.id !== state.ui.selectedKeyframeId) return kf;
-                return {
-                    ...kf,
-                    layerStates: kf.layerStates.map(ls => ({
-                        ...ls,
-                        strokes: ls.strokes.map(s => {
-                            if (s.id === targetId) return { ...s, fillColor: color };
-                            return s;
-                        })
-                    }))
-                };
-            });
-
-            return { 
-               ui: newUI, 
-               project: { ...state.project, keyframes: newKeyframes },
-               history: { past, future: [] }
+        const newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== state.ui.selectedKeyframeId) return kf;
+            return {
+                ...kf,
+                layerStates: kf.layerStates.map(ls => ({
+                    ...ls,
+                    strokes: ls.strokes.map(s => {
+                        if (s.id === targetId) {
+                            return { ...s, style: { ...s.style, fillColor: color } };
+                        }
+                        return s;
+                    })
+                }))
             };
-        }
+        });
+
+        return { 
+           ui: newUI, 
+           project: { ...state.project, keyframes: newKeyframes },
+           history: { past, future: [] }
+        };
     }
 
     return { ui: newUI };
@@ -344,64 +341,74 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setBrushSize: (size) => set((state) => {
     const newUI = { ...state.ui, brushSize: size };
+    
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+        const targetId = state.ui.selectedStrokeId;
+        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
-        let targetId = state.ui.selectedStrokeId;
-        
-        if (!targetId) {
-            const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
-            const ls = kf?.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
-            if (ls && ls.strokes.length > 0) {
-                targetId = ls.strokes[0].id;
-            }
-        }
-
-        if (targetId) {
-            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-
-            const newKeyframes = state.project.keyframes.map(kf => {
-                if (kf.id !== state.ui.selectedKeyframeId) return kf;
-                return {
-                    ...kf,
-                    layerStates: kf.layerStates.map(ls => ({
-                        ...ls,
-                        strokes: ls.strokes.map(s => {
-                            if (s.id === targetId) return { ...s, width: size };
-                            return s;
-                        })
-                    }))
-                };
-            });
-
-            return { 
-               ui: newUI, 
-               project: { ...state.project, keyframes: newKeyframes },
-               history: { past, future: [] }
+        const newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== state.ui.selectedKeyframeId) return kf;
+            return {
+                ...kf,
+                layerStates: kf.layerStates.map(ls => ({
+                    ...ls,
+                    strokes: ls.strokes.map(s => {
+                        if (s.id === targetId) {
+                            return { ...s, style: { ...s.style, strokeWidth: size } };
+                        }
+                        return s;
+                    })
+                }))
             };
-        }
+        });
+
+        return { 
+           ui: newUI, 
+           project: { ...state.project, keyframes: newKeyframes },
+           history: { past, future: [] }
+        };
     }
 
     return { ui: newUI };
   }),
   
   updateLayerStrokeColor: (layerId, color) => set((state) => {
-    const strokeColor = color === 'none' ? 'rgba(0,0,0,0)' : color;
+    const strokeColor = color === 'none' ? 'none' : color;
     const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
+    const newLayers = state.project.layers.map(l => {
+        if (l.id !== layerId) return l;
+        return {
+            ...l,
+            baseStyle: {
+                ...(l.baseStyle || { strokeColor: '#000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid' }),
+                strokeColor
+            }
+        };
+    });
+
+    // Clear overrides for this property in all strokes of this layer
     const newKeyframes = state.project.keyframes.map(kf => ({
         ...kf,
         layerStates: kf.layerStates.map(ls => {
             if (ls.layerId !== layerId) return ls;
             return {
                 ...ls,
-                strokes: ls.strokes.map(s => ({ ...s, color: strokeColor }))
+                strokes: ls.strokes.map(s => {
+                    if (!s.style) return s;
+                    const { strokeColor: _, ...rest } = s.style;
+                    return {
+                        ...s,
+                        style: Object.keys(rest).length > 0 ? rest : undefined
+                    };
+                })
             };
         })
     }));
 
     return { 
        ui: state.ui.selectedLayerId === layerId ? { ...state.ui, brushColor: color } : state.ui,
-       project: { ...state.project, keyframes: newKeyframes },
+       project: { ...state.project, layers: newLayers, keyframes: newKeyframes },
        history: { past, future: [] }
     };
   }),
@@ -409,20 +416,39 @@ export const useStore = create<StoreState>((set, get) => ({
   updateLayerFillColor: (layerId, color) => set((state) => {
     const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
+    const newLayers = state.project.layers.map(l => {
+        if (l.id !== layerId) return l;
+        return {
+            ...l,
+            baseStyle: {
+                ...(l.baseStyle || { strokeColor: '#000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid' }),
+                fillColor: color
+            }
+        };
+    });
+
+    // Clear overrides for this property in all strokes of this layer
     const newKeyframes = state.project.keyframes.map(kf => ({
         ...kf,
         layerStates: kf.layerStates.map(ls => {
             if (ls.layerId !== layerId) return ls;
             return {
                 ...ls,
-                strokes: ls.strokes.map(s => ({ ...s, fillColor: color }))
+                strokes: ls.strokes.map(s => {
+                    if (!s.style) return s;
+                    const { fillColor: _, ...rest } = s.style;
+                    return {
+                        ...s,
+                        style: Object.keys(rest).length > 0 ? rest : undefined
+                    };
+                })
             };
         })
     }));
 
     return { 
        ui: state.ui.selectedLayerId === layerId ? { ...state.ui, fillColor: color } : state.ui,
-       project: { ...state.project, keyframes: newKeyframes },
+       project: { ...state.project, layers: newLayers, keyframes: newKeyframes },
        history: { past, future: [] }
     };
   }),
@@ -430,20 +456,39 @@ export const useStore = create<StoreState>((set, get) => ({
   updateLayerStrokeWidth: (layerId, width) => set((state) => {
     const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
+    const newLayers = state.project.layers.map(l => {
+        if (l.id !== layerId) return l;
+        return {
+            ...l,
+            baseStyle: {
+                ...(l.baseStyle || { strokeColor: '#000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid' }),
+                strokeWidth: width
+            }
+        };
+    });
+
+    // Clear overrides for this property in all strokes of this layer
     const newKeyframes = state.project.keyframes.map(kf => ({
         ...kf,
         layerStates: kf.layerStates.map(ls => {
             if (ls.layerId !== layerId) return ls;
             return {
                 ...ls,
-                strokes: ls.strokes.map(s => ({ ...s, width }))
+                strokes: ls.strokes.map(s => {
+                    if (!s.style) return s;
+                    const { strokeWidth: _, ...rest } = s.style;
+                    return {
+                        ...s,
+                        style: Object.keys(rest).length > 0 ? rest : undefined
+                    };
+                })
             };
         })
     }));
 
     return { 
        ui: state.ui.selectedLayerId === layerId ? { ...state.ui, brushSize: width } : state.ui,
-       project: { ...state.project, keyframes: newKeyframes },
+       project: { ...state.project, layers: newLayers, keyframes: newKeyframes },
        history: { past, future: [] }
     };
   }),
@@ -518,6 +563,38 @@ export const useStore = create<StoreState>((set, get) => ({
     return {
         project: { ...state.project, axes: newAxes }
     };
+  }),
+
+  updateCanvasSize: (width, height) => set((state) => {
+      const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+      const oldWidth = state.project.canvasSize.width;
+      const oldHeight = state.project.canvasSize.height;
+      const dx = (width - oldWidth) / 2;
+      const dy = 0; // Anchor to top-center as requested
+
+      const newKeyframes = state.project.keyframes.map(kf => ({
+          ...kf,
+          layerStates: kf.layerStates.map(ls => ({
+              ...ls,
+              strokes: ls.strokes.map(stroke => ({
+                  ...stroke,
+                  points: stroke.points.map(pt => ({
+                      ...pt,
+                      x: pt.x + dx,
+                      y: pt.y + dy
+                  }))
+              }))
+          }))
+      }));
+
+      return {
+          project: { 
+              ...state.project, 
+              canvasSize: { width, height },
+              keyframes: newKeyframes
+          },
+          history: { past, future: [] }
+      };
   }),
 
   selectLayer: (layerId) => set((state) => {
@@ -649,6 +726,12 @@ export const useStore = create<StoreState>((set, get) => ({
     const layer = state.project.layers.find(l => l.id === selectedLayerId);
     if (layer?.locked || !layer?.visible) return state;
 
+    const baseStyle = layer.baseStyle || { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid' };
+    const styleOverride: Partial<StyleProps> = {};
+    if (brushColor !== baseStyle.strokeColor) styleOverride.strokeColor = brushColor as string;
+    if (fillColor !== baseStyle.fillColor) styleOverride.fillColor = fillColor;
+    if (brushSize !== baseStyle.strokeWidth) styleOverride.strokeWidth = brushSize;
+
     let points = rawPoints;
     let shouldUpdateLayerMode = false;
 
@@ -721,11 +804,8 @@ export const useStore = create<StoreState>((set, get) => ({
     const newStroke: Stroke = {
       id: `stroke-${selectedLayerId}-unique`,
       points,
-      color: brushColor as string, 
-      fillColor: fillColor,
-      width: brushSize,
-      style: 'solid',
-      closed: false 
+      closed: false,
+      style: Object.keys(styleOverride).length > 0 ? styleOverride : undefined
     };
 
     const newKeyframes = keyframes.map(kf => {

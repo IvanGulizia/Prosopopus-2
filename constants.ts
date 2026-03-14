@@ -33,6 +33,12 @@ export const DEFAULT_LAYER: Layer = {
   opacity: 1,
   interpolationMode: 'resample', // Default per layer
   cornerRoundness: 0,
+  baseStyle: {
+    strokeColor: '#000000',
+    strokeWidth: 4,
+    fillColor: 'none',
+    lineStyle: 'solid'
+  }
 };
 
 export const DEFAULT_KEYFRAME: Keyframe = {
@@ -53,7 +59,7 @@ export const DEFAULT_PROJECT: Project = {
   version: '2.9',
   created: Date.now(),
   modified: Date.now(),
-  canvasSize: { width: 800, height: 600 },
+  canvasSize: { width: 600, height: 600 },
   axes: DEFAULT_AXES,
   layers: [DEFAULT_LAYER],
   keyframes: [DEFAULT_KEYFRAME],

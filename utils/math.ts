@@ -375,7 +375,7 @@ export const calculateInterpolationWeights = (
 export const interpolateStrokePoints = (
   strokeId: string,
   basePoints: Point[], 
-  keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined }[],
+  keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number }[],
   mode: 'resample' | 'points' | 'spline' = 'resample',
   targetCount: number = 200 
 ): { points: Point[], color: string, fillColor: string, width: number } => {
@@ -385,13 +385,13 @@ export const interpolateStrokePoints = (
   if (activeKeyframes.length === 0) return { points: [], color: 'rgba(0,0,0,0)', fillColor: 'none', width: 1 };
 
   // 2. Mix Properties
-  const color = mixColors(activeKeyframes.map(k => ({ color: k.style?.color || 'none', weight: k.weight })));
-  const fillColor = mixColors(activeKeyframes.map(k => ({ color: k.style?.fillColor || 'none', weight: k.weight })));
+  const color = mixColors(activeKeyframes.map(k => ({ color: k.color, weight: k.weight })));
+  const fillColor = mixColors(activeKeyframes.map(k => ({ color: k.fillColor, weight: k.weight })));
   
   let totalWidth = 0;
   let widthWeightDivisor = 0;
   activeKeyframes.forEach(k => {
-      totalWidth += (k.style?.width || 1) * k.weight;
+      totalWidth += k.width * k.weight;
       widthWeightDivisor += k.weight;
   });
   const width = widthWeightDivisor > 0 ? totalWidth / widthWeightDivisor : 1;
