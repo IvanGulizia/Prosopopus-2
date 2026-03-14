@@ -1,7 +1,7 @@
 // components/Canvas.tsx
 import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
-import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawCatmullRomSpline, simplifyCollinearPoints } from '../utils/math';
+import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment } from '../utils/math';
 import { Point } from '../types';
 import { APP_COLORS } from '../constants';
 
@@ -70,6 +70,8 @@ export const Canvas: React.FC = () => {
   const [isVertexMode, setIsVertexMode] = useState(false);
   const isVertexModeRef = useRef(false);
   useEffect(() => { isVertexModeRef.current = isVertexMode; }, [isVertexMode]);
+
+  const ignoreNextContextMenuRef = useRef(false);
 
   useEffect(() => {
       if (!ui.selectedStrokeId) {
@@ -310,6 +312,19 @@ export const Canvas: React.FC = () => {
              
              if (stroke) {
                  const vertexIndex = getVertexHit(p, stroke.points);
+                 
+                 if (e.button === 2) { // Right click
+                     if (vertexIndex !== -1 && stroke.points.length > 2) {
+                         const newPoints = [...stroke.points];
+                         newPoints.splice(vertexIndex, 1);
+                         updateStrokeInCurrentKeyframe(ui.selectedStrokeId, newPoints);
+                         ignoreNextContextMenuRef.current = true;
+                     } else {
+                         handleCancel();
+                     }
+                     return;
+                 }
+
                  if (vertexIndex !== -1) {
                      setInteractionMode('draggingVertex');
                      setActiveVertexIndex(vertexIndex);
@@ -319,6 +334,36 @@ export const Canvas: React.FC = () => {
                      });
                      (e.target as Element).setPointerCapture(e.pointerId);
                      return;
+                 } else {
+                     // Check if hit stroke body to add point
+                     const hitStrokeId = findHitStroke(p);
+                     if (hitStrokeId === ui.selectedStrokeId) {
+                         let minDistance = Infinity;
+                         let insertIndex = -1;
+                         for (let i = 0; i < stroke.points.length - 1; i++) {
+                             const p1 = stroke.points[i];
+                             const p2 = stroke.points[i+1];
+                             const dist = distToSegment(p, p1, p2);
+                             if (dist < minDistance) {
+                                 minDistance = dist;
+                                 insertIndex = i + 1;
+                             }
+                         }
+                         if (insertIndex !== -1 && minDistance < 10) {
+                             const newPoints = [...stroke.points];
+                             newPoints.splice(insertIndex, 0, p);
+                             updateStrokeInCurrentKeyframe(ui.selectedStrokeId, newPoints);
+                             
+                             setInteractionMode('draggingVertex');
+                             setActiveVertexIndex(insertIndex);
+                             setTransformStart({
+                                mouse: p, center: {x:0,y:0}, angle: 0, width: 0, height: 0, 
+                                points: newPoints 
+                             });
+                             (e.target as Element).setPointerCapture(e.pointerId);
+                             return;
+                         }
+                     }
                  }
              }
         }
@@ -380,16 +425,7 @@ export const Canvas: React.FC = () => {
         if (ui.snapToGrid) draggedPos = getSnappedPoint(p);
 
         const newPoints = [...transformStart.points];
-        
-        const len = newPoints.length;
-        const isClosedGeometry = distance(newPoints[0], newPoints[len-1]) < 0.1;
-        
         newPoints[activeVertexIndex] = { ...newPoints[activeVertexIndex], x: draggedPos.x, y: draggedPos.y };
-
-        if (isClosedGeometry) {
-            if (activeVertexIndex === 0) newPoints[len-1] = { ...newPoints[len-1], x: draggedPos.x, y: draggedPos.y };
-            else if (activeVertexIndex === len-1) newPoints[0] = { ...newPoints[0], x: draggedPos.x, y: draggedPos.y };
-        }
         
         if (ui.selectedStrokeId) {
             updateStrokeInCurrentKeyframe(ui.selectedStrokeId, newPoints);
@@ -876,9 +912,34 @@ export const Canvas: React.FC = () => {
             onDoubleClick={handleDoubleClick}
             onContextMenu={(e) => {
                 e.preventDefault();
+                if (ignoreNextContextMenuRef.current) {
+                    ignoreNextContextMenuRef.current = false;
+                    return;
+                }
+                const p = getCanvasPoint(e as any);
+                if (ui.selectedTool === 'select' && isVertexMode && ui.selectedStrokeId) {
+                    const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+                    const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
+                    const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+                    if (stroke && getVertexHit(p, stroke.points) !== -1) {
+                        return;
+                    }
+                }
                 handleCancel();
             }}
           />
+          
+          {/* Point Count Display */}
+          {ui.selectedStrokeId && ui.mode === 'edit' && (
+              <div className="absolute bottom-4 right-4 bg-black/40 backdrop-blur-sm text-white text-[10px] font-mono px-2 py-1 rounded-md pointer-events-none opacity-60">
+                  {(() => {
+                      const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+                      const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
+                      const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+                      return stroke ? `${stroke.points.length} pts` : '';
+                  })()}
+              </div>
+          )}
       </div>
     </div>
   );

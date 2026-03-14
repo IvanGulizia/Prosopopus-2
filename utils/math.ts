@@ -226,7 +226,7 @@ export const snapPointToGrid = (p: Point, gridSize: number, offset: {x: number, 
 
 // --- Hit Testing ---
 
-const distToSegment = (p: Point, v: Point, w: Point) => {
+export const distToSegment = (p: Point, v: Point, w: Point) => {
   const l2 = Math.pow(distance(v, w), 2);
   if (l2 === 0) return distance(p, v);
   let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
