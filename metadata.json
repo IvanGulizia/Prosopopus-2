@@ -1,5 +1,5 @@
 {
   "name": "Prosopopus v2",
-  "description": "High-performance vector design application with N-dimensional interpolation and state-based animation. Features point addition/removal in vertex mode, no auto-close, and point count display.",
+  "description": "High-performance vector design application with N-dimensional interpolation and state-based animation. Features cascade styles (Layer -> Stroke), top-anchored canvas resizing, and per-state corner rounding control.",
   "requestFramePermissions": []
 }

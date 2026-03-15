@@ -393,8 +393,12 @@ export const Canvas: React.FC = () => {
         const hitId = findHitStroke(p);
         if (hitId) {
              selectStroke(hitId); 
-             setIsVertexMode(false); 
+             // Do not exit vertex mode if we select another stroke
         } else {
+             if (isVertexMode) {
+                 // Do not deselect if we are in vertex mode and click empty space
+                 return;
+             }
              selectStroke(null);
              setIsVertexMode(false); 
         }
@@ -709,7 +713,8 @@ export const Canvas: React.FC = () => {
                      ctx.stroke();
                 } else {
                     ctx.beginPath();
-                    const cornerRoundness = targetLayer?.cornerRoundness || 0;
+                    const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
+                    const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
                     if (cornerRoundness > 0) {
                        drawCornerRoundedPath(ctx, stroke.points, cornerRoundness);
                     } else {
@@ -760,7 +765,8 @@ export const Canvas: React.FC = () => {
                 style: s, 
                 color: resolvedStyle.strokeColor, 
                 fillColor: resolvedStyle.fillColor, 
-                width: resolvedStyle.strokeWidth 
+                width: resolvedStyle.strokeWidth,
+                cornerRoundness: resolvedStyle.cornerRoundness ?? 0
             };
         });
 
@@ -768,7 +774,7 @@ export const Canvas: React.FC = () => {
         const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
         if (!primaryStroke) return;
 
-        const { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth } = interpolateStrokePoints(
+        const { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness } = interpolateStrokePoints(
             strokeId, 
             primaryStroke.points, 
             strokeData, 
@@ -782,9 +788,8 @@ export const Canvas: React.FC = () => {
                 drawCatmullRomSpline(ctx, interpolatedPoints, 0.5); 
             } else {
                 ctx.beginPath();
-                const cornerRoundness = layer.cornerRoundness || 0;
-                if (cornerRoundness > 0) {
-                    drawCornerRoundedPath(ctx, interpolatedPoints, cornerRoundness);
+                if (interpolatedCornerRoundness > 0) {
+                    drawCornerRoundedPath(ctx, interpolatedPoints, interpolatedCornerRoundness);
                 } else {
                     ctx.moveTo(interpolatedPoints[0].x, interpolatedPoints[0].y);
                     for (let i = 1; i < interpolatedPoints.length; i++) ctx.lineTo(interpolatedPoints[i].x, interpolatedPoints[i].y);
@@ -824,7 +829,7 @@ export const Canvas: React.FC = () => {
         ctx.beginPath();
         const pts = currentPointsRef.current;
         const currentLayer = currentProject.layers.find(l => l.id === currentUI.selectedLayerId);
-        const cornerRoundness = currentLayer?.cornerRoundness || 0;
+        const cornerRoundness = currentLayer?.baseStyle?.cornerRoundness || 0;
         
         if (cornerRoundness > 0) {
              drawCornerRoundedPath(ctx, pts, cornerRoundness);
@@ -853,7 +858,7 @@ export const Canvas: React.FC = () => {
              drawCatmullRomSpline(ctx, polyPreview, 0.5);
          } else {
              ctx.beginPath();
-             const cornerRoundness = currentLayer?.cornerRoundness || 0;
+             const cornerRoundness = currentLayer?.baseStyle?.cornerRoundness || 0;
              if (cornerRoundness > 0) {
                  drawCornerRoundedPath(ctx, polyPreview, cornerRoundness);
              } else {

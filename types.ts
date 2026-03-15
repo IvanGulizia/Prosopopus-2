@@ -20,6 +20,7 @@ export interface StyleProps {
   strokeWidth: number;
   fillColor: string | 'none';
   lineStyle: LineStyle;
+  cornerRoundness?: number; // 0 to 100
 }
 
 export interface Stroke {
@@ -41,7 +42,6 @@ export interface Layer {
   blendMode: BlendMode;
   opacity: number;
   interpolationMode: InterpolationMode; // Per-layer setting
-  cornerRoundness: number; // 0 to 100, controls visual corner rounding
   baseStyle?: StyleProps; // The default style for strokes in this layer
 }
 
@@ -138,6 +138,7 @@ export interface UIState {
   brushSize: number;
   brushColor: string | 'none'; // Can be none now
   fillColor: string | 'none'; 
+  cornerRoundness: number; // 0 to 100
 
   // PERFORMANCE
   resolutionScale: number; // 0.5 to 3.0 (Pixel Density override)

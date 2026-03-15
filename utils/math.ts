@@ -375,26 +375,29 @@ export const calculateInterpolationWeights = (
 export const interpolateStrokePoints = (
   strokeId: string,
   basePoints: Point[], 
-  keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number }[],
+  keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number, cornerRoundness: number }[],
   mode: 'resample' | 'points' | 'spline' = 'resample',
   targetCount: number = 200 
-): { points: Point[], color: string, fillColor: string, width: number } => {
+): { points: Point[], color: string, fillColor: string, width: number, cornerRoundness: number } => {
   
   // 1. Filter active keyframes
   const activeKeyframes = keyframesData.filter(k => k.weight > 0.0001 && k.points && k.points.length > 0);
-  if (activeKeyframes.length === 0) return { points: [], color: 'rgba(0,0,0,0)', fillColor: 'none', width: 1 };
+  if (activeKeyframes.length === 0) return { points: [], color: 'rgba(0,0,0,0)', fillColor: 'none', width: 1, cornerRoundness: 0 };
 
   // 2. Mix Properties
   const color = mixColors(activeKeyframes.map(k => ({ color: k.color, weight: k.weight })));
   const fillColor = mixColors(activeKeyframes.map(k => ({ color: k.fillColor, weight: k.weight })));
   
   let totalWidth = 0;
+  let totalCornerRoundness = 0;
   let widthWeightDivisor = 0;
   activeKeyframes.forEach(k => {
       totalWidth += k.width * k.weight;
+      totalCornerRoundness += k.cornerRoundness * k.weight;
       widthWeightDivisor += k.weight;
   });
   const width = widthWeightDivisor > 0 ? totalWidth / widthWeightDivisor : 1;
+  const cornerRoundness = widthWeightDivisor > 0 ? totalCornerRoundness / widthWeightDivisor : 0;
 
   // 3. Point Count Calculation
   let ACTUAL_TARGET_COUNT = targetCount; 
@@ -465,7 +468,7 @@ export const interpolateStrokePoints = (
       }
   }
 
-  return { points: resultPoints, color, fillColor, width };
+  return { points: resultPoints, color, fillColor, width, cornerRoundness };
 };
 
 // --- OPTIMIZATION & SMOOTHING ---

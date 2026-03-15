@@ -6,7 +6,8 @@ export function resolveStrokeStyle(stroke: Stroke | undefined, layer: Layer | un
     strokeColor: '#000000',
     strokeWidth: 4,
     fillColor: 'none',
-    lineStyle: 'solid'
+    lineStyle: 'solid',
+    cornerRoundness: 0
   };
 
   const baseStyle = layer?.baseStyle || defaultStyle;
@@ -16,7 +17,8 @@ export function resolveStrokeStyle(stroke: Stroke | undefined, layer: Layer | un
       strokeColor: baseStyle.strokeColor,
       strokeWidth: baseStyle.strokeWidth,
       fillColor: baseStyle.fillColor,
-      lineStyle: baseStyle.lineStyle
+      lineStyle: baseStyle.lineStyle,
+      cornerRoundness: baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness
     };
   }
 
@@ -24,6 +26,7 @@ export function resolveStrokeStyle(stroke: Stroke | undefined, layer: Layer | un
     strokeColor: stroke.style.strokeColor ?? baseStyle.strokeColor,
     strokeWidth: stroke.style.strokeWidth ?? baseStyle.strokeWidth,
     fillColor: stroke.style.fillColor ?? baseStyle.fillColor,
-    lineStyle: stroke.style.lineStyle ?? baseStyle.lineStyle
+    lineStyle: stroke.style.lineStyle ?? baseStyle.lineStyle,
+    cornerRoundness: stroke.style.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness
   };
 }

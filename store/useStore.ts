@@ -1,6 +1,6 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME } from '../constants';
 import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints } from '../utils/math';
 
@@ -80,7 +80,8 @@ interface StoreState {
   toggleLayerLock: (layerId: string) => void;
   setLayerBlendMode: (layerId: string, mode: BlendMode) => void;
   setLayerInterpolationMode: (layerId: string, mode: InterpolationMode) => void;
-  setLayerCornerRoundness: (layerId: string, roundness: number) => void;
+  setLayerCornerRoundness: (layerId: string, roundness: number, applyToAllStates?: boolean) => void;
+  setStrokeCornerRoundness: (strokeId: string, roundness: number) => void;
   selectLayer: (layerId: string) => void;
   
   updateAxisValue: (axisId: string, value: number) => void;
@@ -125,7 +126,8 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
         return {
             brushColor: style.strokeColor,
             fillColor: style.fillColor,
-            brushSize: style.strokeWidth
+            brushSize: style.strokeWidth,
+            cornerRoundness: style.cornerRoundness
         };
     }
 
@@ -141,7 +143,8 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
     return {
         brushColor: style.strokeColor,
         fillColor: style.fillColor,
-        brushSize: style.strokeWidth
+        brushSize: style.strokeWidth,
+        cornerRoundness: style.cornerRoundness
     };
 };
 
@@ -708,12 +711,65 @@ export const useStore = create<StoreState>((set, get) => ({
     };
   }),
 
-  setLayerCornerRoundness: (layerId, roundness) => set((state) => {
+  setLayerCornerRoundness: (layerId, roundness, applyToAllStates = false) => set((state) => {
+    const currentKeyframeId = state.ui.selectedKeyframeId;
     return {
+      ui: state.ui.selectedLayerId === layerId ? { ...state.ui, cornerRoundness: roundness } : state.ui,
       project: {
         ...state.project,
-        layers: state.project.layers.map(l => 
-          l.id === layerId ? { ...l, cornerRoundness: roundness } : l
+        layers: applyToAllStates ? state.project.layers.map(l => 
+          l.id === layerId ? { ...l, baseStyle: { ...l.baseStyle, cornerRoundness: roundness } as StyleProps } : l
+        ) : state.project.layers,
+        keyframes: state.project.keyframes.map(kf => {
+          if (applyToAllStates) {
+            return {
+              ...kf,
+              layerStates: kf.layerStates.map(ls => 
+                ls.layerId === layerId ? {
+                  ...ls,
+                  strokes: ls.strokes.map(s => ({
+                    ...s,
+                    style: { ...s.style, cornerRoundness: undefined }
+                  }))
+                } : ls
+              )
+            };
+          } else if (kf.id === currentKeyframeId) {
+            return {
+              ...kf,
+              layerStates: kf.layerStates.map(ls => 
+                ls.layerId === layerId ? {
+                  ...ls,
+                  strokes: ls.strokes.map(s => ({
+                    ...s,
+                    style: { ...s.style, cornerRoundness: roundness }
+                  }))
+                } : ls
+              )
+            };
+          }
+          return kf;
+        })
+      }
+    };
+  }),
+
+  setStrokeCornerRoundness: (strokeId, roundness) => set((state) => {
+    const currentKeyframeId = state.ui.selectedKeyframeId;
+    return {
+      ui: { ...state.ui, cornerRoundness: roundness },
+      project: {
+        ...state.project,
+        keyframes: state.project.keyframes.map(kf => 
+          kf.id === currentKeyframeId ? {
+            ...kf,
+            layerStates: kf.layerStates.map(ls => ({
+              ...ls,
+              strokes: ls.strokes.map(s => 
+                s.id === strokeId ? { ...s, style: { ...s.style, cornerRoundness: roundness } } : s
+              )
+            }))
+          } : kf
         )
       }
     };
@@ -726,11 +782,12 @@ export const useStore = create<StoreState>((set, get) => ({
     const layer = state.project.layers.find(l => l.id === selectedLayerId);
     if (layer?.locked || !layer?.visible) return state;
 
-    const baseStyle = layer.baseStyle || { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid' };
+    const baseStyle = layer.baseStyle || { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid', cornerRoundness: 0 };
     const styleOverride: Partial<StyleProps> = {};
     if (brushColor !== baseStyle.strokeColor) styleOverride.strokeColor = brushColor as string;
     if (fillColor !== baseStyle.fillColor) styleOverride.fillColor = fillColor;
     if (brushSize !== baseStyle.strokeWidth) styleOverride.strokeWidth = brushSize;
+    if (state.ui.cornerRoundness !== (baseStyle.cornerRoundness || 0)) styleOverride.cornerRoundness = state.ui.cornerRoundness;
 
     let points = rawPoints;
     let shouldUpdateLayerMode = false;
@@ -751,15 +808,15 @@ export const useStore = create<StoreState>((set, get) => ({
     }
     // --- SPLINE OPTIMIZATION ---
     // If we are in Spline mode, we want Anchors, not 1000 mouse points.
-    else if (layer.interpolationMode === 'spline' && !skipSimplify && state.ui.selectedTool !== 'polyline') {
+    else if (layer.interpolationMode === 'spline' && !skipSimplify) {
         // Aggressive simplification to create structural anchors
         points = simplifyPoints(rawPoints, 2.5);
     }
     // --- STANDARD OPTIMIZATION ---
-    else if (!skipSimplify && smoothingEnabled && state.ui.selectedTool !== 'polyline') { 
+    else if (!skipSimplify && smoothingEnabled) { 
        const preSimplified = simplifyPoints(rawPoints, 1.5);
        points = chaikinSmooth(preSimplified, 2);
-    } else if (!skipSimplify && !smoothingEnabled && state.ui.selectedTool !== 'polyline') {
+    } else if (!skipSimplify && !smoothingEnabled) {
        points = simplifyPoints(rawPoints, 1.5);
     }
 

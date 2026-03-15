@@ -287,6 +287,7 @@ export const SettingsPanel: React.FC = () => {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [openSections, setOpenSections] = useState<string[]>(['layer-styles']);
+  const [applyToAllStates, setApplyToAllStates] = useState(false);
 
   const toggleSection = (section: string) => {
       setOpenSections(prev => 
@@ -297,7 +298,11 @@ export const SettingsPanel: React.FC = () => {
   if (!isSettingsOpen) return null;
 
   const currentLayer = project.layers.find(l => l.id === ui.selectedLayerId);
-  const currentCornerRoundness = currentLayer?.cornerRoundness || 0;
+  const currentKeyframe = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+  const currentState = currentKeyframe?.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
+  const currentStroke = ui.selectedStrokeId ? currentState?.strokes.find(s => s.id === ui.selectedStrokeId) : undefined;
+  
+  const currentCornerRoundness = ui.cornerRoundness;
 
   const handleReset = (e: React.MouseEvent) => {
       e.preventDefault();
@@ -474,13 +479,31 @@ export const SettingsPanel: React.FC = () => {
 
             <div className="space-y-3 pt-2">
                  {/* CORNER ROUNDNESS CONTROL */}
-                 <SettingsRow label="Corner Rounding" value={`${currentCornerRoundness}%`}>
-                     <input type="range" min="0" max="100" step="5" value={currentCornerRoundness} onChange={(e) => {
-                         if (ui.selectedLayerId) {
-                             setLayerCornerRoundness(ui.selectedLayerId, parseInt(e.target.value));
-                         }
-                     }} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-500 hover:accent-teal-600"/>
-                 </SettingsRow>
+                 <div className="space-y-2">
+                     <SettingsRow label="Corner Rounding" value={`${currentCornerRoundness}%`}>
+                         <input type="range" min="0" max="100" step="5" value={currentCornerRoundness} onChange={(e) => {
+                             if (ui.selectedLayerId) {
+                                 const val = parseInt(e.target.value);
+                                 if (applyToAllStates) {
+                                     setLayerCornerRoundness(ui.selectedLayerId, val, true);
+                                 } else if (currentStroke) {
+                                     useStore.getState().setStrokeCornerRoundness(currentStroke.id, val);
+                                 } else {
+                                     setLayerCornerRoundness(ui.selectedLayerId, val, false);
+                                 }
+                             }
+                         }} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-500 hover:accent-teal-600"/>
+                     </SettingsRow>
+                     <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                         <input 
+                             type="checkbox" 
+                             checked={applyToAllStates} 
+                             onChange={(e) => setApplyToAllStates(e.target.checked)}
+                             className="rounded text-blue-500 focus:ring-blue-500"
+                         />
+                         Apply to all states in layer
+                     </label>
+                 </div>
 
                  {/* STROKE CAP CONTROL */}
                  <div>

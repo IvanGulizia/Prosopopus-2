@@ -32,12 +32,12 @@ export const DEFAULT_LAYER: Layer = {
   blendMode: 'normal',
   opacity: 1,
   interpolationMode: 'resample', // Default per layer
-  cornerRoundness: 0,
   baseStyle: {
     strokeColor: '#000000',
     strokeWidth: 4,
     fillColor: 'none',
-    lineStyle: 'solid'
+    lineStyle: 'solid',
+    cornerRoundness: 0
   }
 };
 
@@ -106,6 +106,7 @@ export const INITIAL_UI_STATE: UIState = {
   brushSize: 4,
   brushColor: '#000000',
   fillColor: 'none', 
+  cornerRoundness: 0,
 
   resolutionScale: 1.5, // Crisp default without killing FPS (Retina is usually 2 or 3)
   performanceMode: true, // DEFAULT: ECO MODE
