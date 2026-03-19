@@ -82,6 +82,7 @@ export interface Project {
   axes: Axis[];
   layers: Layer[];
   keyframes: Keyframe[];
+  settings?: Partial<UIState>; // Store relevant UI settings
 }
 
 // --- UI State ---
@@ -89,6 +90,22 @@ export type ToolType = 'cursor' | 'select' | 'pen' | 'polyline';
 export type UIMode = 'edit' | 'play';
 // 'bilinear-grid' separates axes logic for stable matrix interpolation
 export type InterpolationStrategy = 'idw' | 'bilinear-grid'; 
+
+export interface Theme {
+  bgApp: string;
+  bgToolbar: string;
+  bgPanel: string;
+  accent: string;
+  textMain: string;
+  textMuted: string;
+  border: string;
+  // States
+  hoverBg: string;
+  activeBg: string;
+  // Canvas
+  canvasBg: string;
+  gridColor: string;
+}
 
 export interface UIState {
   mode: UIMode;
@@ -99,6 +116,11 @@ export interface UIState {
   
   isPlaying: boolean;
   isLayerPanelOpen: boolean;
+  isSettingsOpen: boolean;
+  isDebugMenuOpen: boolean;
+  
+  // Theme
+  theme: Theme;
   
   // Canvas Helpers
   showGrid: boolean;

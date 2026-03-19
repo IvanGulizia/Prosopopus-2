@@ -9,7 +9,7 @@ const Icons = {
   Select: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>,
   Pen: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>,
   // UPDATED ICON: Shows explicit nodes and connections
-  PolyIcon: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/><path d="M5 17 12 7 17 7"/></svg>,
+  PolyIcon: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 7 3 10 8-12"/><circle cx="7" cy="7" r="2"/><circle cx="10" cy="17" r="2"/><circle cx="18" cy="5" r="2"/></svg>,
   Settings: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>,
   Undo: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>,
   Redo: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/></svg>,
@@ -21,11 +21,12 @@ const Icons = {
 const STROKE_SIZES = [2, 4, 8, 12, 16];
 
 export const Toolbar: React.FC = () => {
-  const { ui, setTool, undo, redo, history, toggleSettings, isSettingsOpen, setMode, setBrushColor, setFillColor, setBrushSize, closeAllPanels } = useStore();
+  const { ui, setTool, undo, redo, history, toggleSettings, setMode, setBrushColor, setFillColor, setBrushSize, closeAllPanels } = useStore();
   const [activeColorPicker, setActiveColorPicker] = useState<'stroke' | 'fill' | 'size' | null>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   
   const isPlayMode = ui.mode === 'play';
+  const isSettingsOpen = ui.isSettingsOpen;
 
   // Handle click outside
   useEffect(() => {
@@ -64,7 +65,7 @@ export const Toolbar: React.FC = () => {
         <div className="w-[100px] flex justify-center">
             <button 
             onClick={() => setMode(isPlayMode ? 'edit' : 'play')}
-            className={`px-4 py-2.5 rounded-full transition-all duration-200 flex items-center justify-center gap-2 w-full
+            className={`px-4 h-12 rounded-full transition-all duration-200 flex items-center justify-center gap-2 w-full
                 ${isPlayMode 
                 ? 'bg-green-500 text-white shadow-lg' 
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}

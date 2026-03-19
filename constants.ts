@@ -1,5 +1,5 @@
 // constants.ts
-import { Axis, Layer, Project, Keyframe, UIState } from './types';
+import { Axis, Layer, Project, Keyframe, UIState, Theme } from './types';
 
 export const APP_COLORS = {
   background: '#EAEAEA',
@@ -14,7 +14,8 @@ export const APP_COLORS = {
 export const PALETTE_COLORS = [
   '#000000', '#545454', '#737373', '#A6A6A6', '#D9D9D9', '#FFFFFF',
   '#EF4444', '#F97316', '#F59E0B', '#84CC16', '#10B981', '#06B6D4',
-  '#3B82F6', '#6366F1', '#8B5CF6', '#D946EF', '#F43F5E', '#881337'
+  '#3B82F6', '#6366F1', '#8B5CF6', '#D946EF', '#F43F5E', '#881337',
+  'none'
 ];
 
 export const DEFAULT_AXES: Axis[] = [
@@ -65,6 +66,20 @@ export const DEFAULT_PROJECT: Project = {
   keyframes: [DEFAULT_KEYFRAME],
 };
 
+export const INITIAL_THEME: Theme = {
+  bgApp: '#F5F5F7',
+  bgToolbar: '#FFFFFF',
+  bgPanel: '#FFFFFF',
+  accent: '#141414',
+  textMain: '#1D1D1F',
+  textMuted: '#86868B',
+  border: '#D2D2D7',
+  hoverBg: '#F5F5F7',
+  activeBg: '#E8E8ED',
+  canvasBg: '#FFFFFF',
+  gridColor: '#E5E7EB',
+};
+
 export const INITIAL_UI_STATE: UIState = {
   mode: 'edit',
   selectedTool: 'pen',
@@ -74,6 +89,10 @@ export const INITIAL_UI_STATE: UIState = {
   
   isPlaying: false,
   isLayerPanelOpen: true,
+  isSettingsOpen: false,
+  isDebugMenuOpen: false,
+
+  theme: INITIAL_THEME,
   
   showGrid: false, 
   snapToGrid: false,

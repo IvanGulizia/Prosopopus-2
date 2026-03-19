@@ -678,11 +678,11 @@ export const Canvas: React.FC = () => {
       // --- RENDERING ---
 
       ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = currentUI.theme.canvasBg;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       
       if (currentUI.showGrid && currentUI.mode === 'edit') {
-        ctx.fillStyle = '#D1D5DB';
+        ctx.fillStyle = currentUI.theme.gridColor;
         const gridSize = currentUI.gridSize;
         const centerX = CANVAS_WIDTH / 2;
         const centerY = CANVAS_HEIGHT / 2;

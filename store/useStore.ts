@@ -1,6 +1,6 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME } from '../constants';
 import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints } from '../utils/math';
 
@@ -15,8 +15,6 @@ interface StoreState {
 
   // Internal Clipboard for Copy/Paste State
   clipboard: LayerState[] | null; 
-
-  isSettingsOpen: boolean;
 
   // Actions
   undo: () => void;
@@ -103,6 +101,9 @@ interface StoreState {
   pasteKeyframeState: () => void;
   
   selectStroke: (strokeId: string | null) => void;
+  
+  toggleDebugMenu: () => void;
+  setThemeColor: (key: keyof Theme, color: string) => void;
 }
 
 import { resolveStrokeStyle } from '../utils/style';
@@ -151,7 +152,6 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
 export const useStore = create<StoreState>((set, get) => ({
   project: DEFAULT_PROJECT,
   ui: INITIAL_UI_STATE,
-  isSettingsOpen: false,
   clipboard: null, // Initialize clipboard
   
   history: {
@@ -188,30 +188,33 @@ export const useStore = create<StoreState>((set, get) => ({
       };
   }),
 
-  loadProject: (project) => set(() => ({
+  loadProject: (project) => set((state) => ({
       project: project,
       ui: {
-          ...INITIAL_UI_STATE,
+          ...state.ui,
+          ...(project.settings || {}), // Restore settings if they exist
           selectedLayerId: project.layers[0]?.id || null,
-          selectedKeyframeId: project.keyframes[0]?.id || null
+          selectedKeyframeId: project.keyframes[0]?.id || null,
+          isSettingsOpen: false // Close settings after import
       },
       clipboard: null,
       history: { past: [], future: [] }
   })),
 
-  toggleSettings: () => set((state) => ({ isSettingsOpen: !state.isSettingsOpen, ui: { ...state.ui, isLayerPanelOpen: false } })),
-  toggleLayerPanel: () => set((state) => ({ ui: { ...state.ui, isLayerPanelOpen: !state.ui.isLayerPanelOpen }, isSettingsOpen: false })),
-  closeAllPanels: () => set((state) => ({ isSettingsOpen: false, ui: { ...state.ui, isLayerPanelOpen: false } })),
+  toggleSettings: () => set((state) => ({ ui: { ...state.ui, isSettingsOpen: !state.ui.isSettingsOpen, isLayerPanelOpen: false, isDebugMenuOpen: false } })),
+  toggleLayerPanel: () => set((state) => ({ ui: { ...state.ui, isLayerPanelOpen: !state.ui.isLayerPanelOpen, isSettingsOpen: false, isDebugMenuOpen: false } })),
+  toggleDebugMenu: () => set((state) => ({ ui: { ...state.ui, isDebugMenuOpen: !state.ui.isDebugMenuOpen, isSettingsOpen: false } })),
+  setThemeColor: (key, color) => set((state) => ({ ui: { ...state.ui, theme: { ...state.ui.theme, [key]: color } } })),
+  closeAllPanels: () => set((state) => ({ ui: { ...state.ui, isSettingsOpen: false, isLayerPanelOpen: false } })),
 
   setMode: (mode) => set((state) => ({
     ui: {
         ...state.ui,
         mode,
         // Auto-close panels when entering Play mode
-        isLayerPanelOpen: mode === 'play' ? false : state.ui.isLayerPanelOpen
-    },
-    // Auto-close settings when entering Play mode
-    isSettingsOpen: mode === 'play' ? false : state.isSettingsOpen
+        isLayerPanelOpen: mode === 'play' ? false : state.ui.isLayerPanelOpen,
+        isSettingsOpen: mode === 'play' ? false : state.ui.isSettingsOpen
+    }
   })),
 
   undo: () => set((state) => {

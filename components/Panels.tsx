@@ -1,12 +1,14 @@
 // components/Panels.tsx
 import React, { useState, useRef } from 'react';
+import { Layers, Settings, Plus, Trash2, Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { BlendMode, InterpolationMode } from '../types';
+import { BlendMode, InterpolationMode, Theme } from '../types';
 import { PALETTE_COLORS } from '../constants';
 
 export const LayerPanel: React.FC = () => {
   const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
   const layers = project.layers;
+  const { theme } = ui;
 
   // Drag and Drop State
   const [draggedLayerIndex, setDraggedLayerIndex] = useState<number | null>(null);
@@ -21,7 +23,8 @@ export const LayerPanel: React.FC = () => {
     return (
        <button 
          onClick={(e) => { e.stopPropagation(); toggleLayerPanel(); }}
-         className="absolute left-6 top-28 bg-white/90 p-3 rounded-2xl shadow-lg border border-gray-100 text-gray-500 hover:text-gray-900 transition-colors pointer-events-auto"
+         className="absolute left-6 top-28 p-3 rounded-2xl shadow-lg border transition-colors pointer-events-auto"
+         style={{ backgroundColor: `${theme.bgPanel}EE`, borderColor: theme.border, color: theme.textMain }}
          title="Open Layers"
        >
          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 17L12 22L22 17"/><path d="M2 12L12 17L22 12"/><path d="M12 2L2 7L12 12L22 7L12 2Z"/></svg>
@@ -87,28 +90,34 @@ export const LayerPanel: React.FC = () => {
   return (
     <div 
       onClick={(e) => e.stopPropagation()}
-      className="absolute left-6 top-28 w-72 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/50 overflow-hidden flex flex-col max-h-[60vh] pointer-events-auto transition-all duration-300 ring-1 ring-gray-100"
+      className="absolute left-6 top-28 w-72 backdrop-blur-xl rounded-3xl shadow-2xl border overflow-hidden flex flex-col max-h-[60vh] pointer-events-auto transition-all duration-300"
+      style={{ backgroundColor: `${theme.bgPanel}EE`, borderColor: theme.border, color: theme.textMain }}
     >
-      <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white/50">
+      <div className="p-5 border-b flex justify-between items-center" style={{ borderColor: theme.border, backgroundColor: `${theme.bgPanel}55` }}>
         <div>
-            <h2 className="font-bold text-gray-800 text-base">Layers</h2>
-            <p className="text-[10px] text-gray-400 font-medium">{layers.length} Active</p>
+            <h2 className="font-bold text-base">Layers</h2>
+            <p className="text-[10px] font-medium" style={{ color: theme.textMuted }}>{layers.length} Active</p>
         </div>
         <div className="flex gap-2">
             <button 
               onClick={addLayer}
-              className="text-white bg-blue-500 hover:bg-blue-600 rounded-full p-1.5 transition-colors shadow-sm"
+              className="rounded-full p-1.5 transition-colors shadow-sm"
+              style={{ backgroundColor: theme.accent, color: '#FFFFFF' }}
               title="Add New Layer"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 5v14M5 12h14"/></svg>
             </button>
-            <button onClick={toggleLayerPanel} className="text-gray-400 hover:bg-gray-100 rounded-full p-1.5 transition-colors">
+            <button 
+              onClick={toggleLayerPanel} 
+              className="rounded-full p-1.5 transition-colors"
+              style={{ color: theme.textMuted }}
+            >
                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"></polyline></svg>
             </button>
         </div>
       </div>
       
-      <div className="overflow-y-auto flex-1 p-3 space-y-2 custom-scrollbar">
+      <div className="overflow-y-auto flex-1 p-4 space-y-2 custom-scrollbar">
         {[...layers].reverse().map((layer, index) => (
           <div 
             key={layer.id}
@@ -119,9 +128,14 @@ export const LayerPanel: React.FC = () => {
             onClick={() => selectLayer(layer.id)}
             className={`group flex items-center gap-3 p-3 rounded-2xl text-sm cursor-pointer transition-all border relative ${
               ui.selectedLayerId === layer.id 
-                ? 'bg-blue-50/80 border-blue-100 text-blue-900 shadow-sm ring-1 ring-blue-100' 
-                : 'bg-white hover:bg-gray-50 border-transparent hover:border-gray-100 text-gray-600 shadow-sm'
+                ? 'shadow-sm' 
+                : 'shadow-sm'
             } ${draggedLayerIndex === index ? 'opacity-50' : ''}`}
+            style={{ 
+              backgroundColor: ui.selectedLayerId === layer.id ? theme.activeBg : 'transparent',
+              borderColor: ui.selectedLayerId === layer.id ? theme.accent : 'transparent',
+              color: ui.selectedLayerId === layer.id ? theme.textMain : theme.textMuted
+            }}
           >
             {/* Grip */}
             <div className="cursor-grab text-gray-300 hover:text-gray-400 flex flex-col gap-[2px]">
@@ -220,25 +234,23 @@ export const LayerPanel: React.FC = () => {
 };
 
 // HELPER: Section Component
-const SettingsSection = ({ title, description, children, isOpen, onToggle }: { title: string, description?: string, children: React.ReactNode, isOpen: boolean, onToggle: () => void }) => (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+const SettingsSection = ({ title, children, isOpen, onToggle, theme }: { title: string, children: React.ReactNode, isOpen: boolean, onToggle: () => void, theme: Theme }) => (
+    <div className="rounded-2xl shadow-sm border overflow-hidden mt-4 first:mt-0" style={{ backgroundColor: theme.bgPanel, borderColor: theme.border }}>
         <button 
             onClick={onToggle}
-            className="w-full text-left p-4 flex justify-between items-center hover:bg-gray-50 transition-colors"
+            className="w-full text-left p-4 flex justify-between items-center transition-colors"
+            style={{ backgroundColor: isOpen ? `${theme.activeBg}44` : 'transparent' }}
         >
             <div>
-                <h4 className="text-xs font-bold text-gray-900 uppercase tracking-widest">{title}</h4>
-                {description && <p className="text-[10px] text-gray-400 mt-1 leading-relaxed">{description}</p>}
+                <h4 className="text-xs font-bold uppercase tracking-widest" style={{ color: theme.textMain }}>{title}</h4>
             </div>
-            <svg 
-                className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} 
-                fill="none" viewBox="0 0 24 24" stroke="currentColor"
-            >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
+            <ChevronDown 
+                className={`w-4 h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} 
+                style={{ color: theme.textMuted }}
+            />
         </button>
         <div className={`transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[1000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-            <div className="p-4 pt-0 space-y-4 border-t border-gray-50">
+            <div className="p-4 space-y-4 border-t" style={{ borderColor: theme.border }}>
                 {children}
             </div>
         </div>
@@ -271,7 +283,7 @@ const SettingsToggle = ({ label, active, onClick }: { label: string, active: boo
 
 export const SettingsPanel: React.FC = () => {
   const { 
-      project, isSettingsOpen, toggleSettings, ui, 
+      project, toggleSettings, ui, 
       toggleGrid, toggleSnapToGrid, setSnapScale, toggleOnionSkin, 
       setOnionSkinOpacity, toggleSmoothing, 
       resetProject, loadProject, toggleSnapMatrixGrid, 
@@ -285,9 +297,13 @@ export const SettingsPanel: React.FC = () => {
       updateCanvasSize
   } = useStore();
   
+  const { theme, isSettingsOpen } = ui;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [openSections, setOpenSections] = useState<string[]>(['layer-styles']);
   const [applyToAllStates, setApplyToAllStates] = useState(false);
+
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportFileName, setExportFileName] = useState(project.name);
 
   const toggleSection = (section: string) => {
       setOpenSections(prev => 
@@ -299,8 +315,8 @@ export const SettingsPanel: React.FC = () => {
 
   const currentLayer = project.layers.find(l => l.id === ui.selectedLayerId);
   const currentKeyframe = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-  const currentState = currentKeyframe?.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
-  const currentStroke = ui.selectedStrokeId ? currentState?.strokes.find(s => s.id === ui.selectedStrokeId) : undefined;
+  const layerState = currentKeyframe?.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
+  const currentStroke = ui.selectedStrokeId ? layerState?.strokes.find(s => s.id === ui.selectedStrokeId) : undefined;
   
   const currentCornerRoundness = ui.cornerRoundness;
 
@@ -311,14 +327,48 @@ export const SettingsPanel: React.FC = () => {
   };
 
   const handleExport = () => {
-      const data = JSON.stringify(project, null, 2);
+      // Include relevant UI settings in the export
+      const projectWithSettings = {
+          ...project,
+          name: exportFileName,
+          settings: {
+              theme: ui.theme,
+              showGrid: ui.showGrid,
+              gridSize: ui.gridSize,
+              snapToGrid: ui.snapToGrid,
+              snapScale: ui.snapScale,
+              onionSkinEnabled: ui.onionSkinEnabled,
+              onionSkinOpacity: ui.onionSkinOpacity,
+              inactiveLayerOpacity: ui.inactiveLayerOpacity,
+              ghostStrokeOpacity: ui.ghostStrokeOpacity,
+              smoothingEnabled: ui.smoothingEnabled,
+              resolutionScale: ui.resolutionScale,
+              performanceMode: ui.performanceMode,
+              snapPlayMode: ui.snapPlayMode,
+              snapMatrixGrid: ui.snapMatrixGrid,
+              axisMatrixDivisions: ui.axisMatrixDivisions,
+              axisMatrixPadding: ui.axisMatrixPadding,
+              interpolationExponent: ui.interpolationExponent,
+              interpolationStrategy: ui.interpolationStrategy,
+              playModePhysics: ui.playModePhysics,
+              springStiffness: ui.springStiffness,
+              springDamping: ui.springDamping,
+              strokeCap: ui.strokeCap,
+              brushSize: ui.brushSize,
+              brushColor: ui.brushColor,
+              fillColor: ui.fillColor,
+              cornerRoundness: ui.cornerRoundness
+          }
+      };
+      const data = JSON.stringify(projectWithSettings, null, 2);
       const blob = new Blob([data], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${project.name.replace(/\s+/g, '_').toLowerCase()}_v${project.version}.json`;
+      a.download = `${exportFileName.replace(/\s+/g, '_').toLowerCase()}.json`;
       a.click();
       URL.revokeObjectURL(url);
+      setIsExporting(false);
   };
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -340,50 +390,67 @@ export const SettingsPanel: React.FC = () => {
   return (
     <div 
       onClick={(e) => e.stopPropagation()}
-      className="absolute top-28 right-6 w-96 bg-gray-50/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-white/50 z-50 flex flex-col max-h-[75vh] pointer-events-auto overflow-hidden animate-in fade-in slide-in-from-top-4 duration-300 ring-1 ring-gray-200"
+      className="absolute top-28 right-6 w-96 backdrop-blur-2xl rounded-3xl shadow-2xl border z-50 flex flex-col max-h-[75vh] pointer-events-auto overflow-hidden animate-in fade-in slide-in-from-top-4 duration-300"
+      style={{ backgroundColor: `${theme.bgPanel}EE`, borderColor: theme.border, color: theme.textMain }}
     >
       {/* Header */}
-      <div className="flex justify-between items-center p-6 border-b border-gray-200 bg-white/80 backdrop-blur-sm sticky top-0 z-10">
+      <div className="flex justify-between items-center p-6 border-b sticky top-0 z-10" style={{ borderColor: theme.border, backgroundColor: `${theme.bgPanel}CC` }}>
         <div>
-            <h3 className="font-bold text-gray-900 text-lg">Settings</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Global configuration</p>
+            <h3 className="font-bold text-lg">Settings</h3>
+            <p className="text-xs mt-0.5" style={{ color: theme.textMuted }}>Global configuration</p>
         </div>
-        <button onClick={toggleSettings} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full p-2 transition-all">
-           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        <button 
+          onClick={toggleSettings}
+          className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+          style={{ backgroundColor: theme.activeBg, color: theme.textMain }}
+        >
+          <X size={18} />
         </button>
       </div>
 
-      <div className="p-6 space-y-8 overflow-y-auto custom-scrollbar">
+      <div className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
         
         {/* SECTION: LAYER GLOBAL STYLES */}
         <SettingsSection 
             title="Layer Global Styles" 
-            description="Apply changes to all states in the selected layer."
             isOpen={openSections.includes('layer-styles')}
             onToggle={() => toggleSection('layer-styles')}
+            theme={theme}
         >
              <div className="space-y-3">
                  <SettingsRow label="Stroke Color">
-                     <div className="flex gap-2">
+                     <div className="grid grid-cols-8 gap-1.5 w-full">
                          {PALETTE_COLORS.map(c => (
                              <button 
                                  key={c} 
                                  onClick={() => ui.selectedLayerId && updateLayerStrokeColor(ui.selectedLayerId, c)}
-                                 className="w-6 h-6 rounded-full border border-gray-200 hover:scale-110 transition-transform"
-                                 style={{ backgroundColor: c === 'none' ? 'transparent' : c }}
-                             />
+                                 className="w-6 h-6 rounded-full border relative group overflow-hidden transition-transform hover:scale-110"
+                                 style={{ 
+                                   backgroundColor: c === 'none' ? '#FFFFFF' : c,
+                                   borderColor: theme.border,
+                                   boxShadow: (currentLayer?.baseStyle?.strokeColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
+                                 }}
+                             >
+                               {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
+                             </button>
                          ))}
                      </div>
                  </SettingsRow>
                  <SettingsRow label="Fill Color">
-                     <div className="flex gap-2">
+                     <div className="grid grid-cols-8 gap-1.5 w-full">
                          {PALETTE_COLORS.map(c => (
                              <button 
                                  key={c} 
                                  onClick={() => ui.selectedLayerId && updateLayerFillColor(ui.selectedLayerId, c)}
-                                 className="w-6 h-6 rounded-full border border-gray-200 hover:scale-110 transition-transform"
-                                 style={{ backgroundColor: c === 'none' ? 'transparent' : c }}
-                             />
+                                 className="w-6 h-6 rounded-full border relative group overflow-hidden transition-transform hover:scale-110"
+                                 style={{ 
+                                   backgroundColor: c === 'none' ? '#FFFFFF' : c,
+                                   borderColor: theme.border,
+                                   boxShadow: (currentLayer?.baseStyle?.fillColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
+                                 }}
+                             >
+                               {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
+                             </button>
                          ))}
                      </div>
                  </SettingsRow>
@@ -404,9 +471,10 @@ export const SettingsPanel: React.FC = () => {
             title="Project & Data"
             isOpen={openSections.includes('project-data')}
             onToggle={() => toggleSection('project-data')}
+            theme={theme}
         >
              <div className="grid grid-cols-2 gap-3 mb-4">
-                 <button onClick={handleExport} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
+                 <button onClick={() => setIsExporting(true)} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     Export JSON
                  </button>
@@ -431,9 +499,9 @@ export const SettingsPanel: React.FC = () => {
         {/* SECTION: CANVAS */}
         <SettingsSection 
             title="Canvas & Guides" 
-            description="Configure visual aids and drawing precision."
             isOpen={openSections.includes('canvas-guides')}
             onToggle={() => toggleSection('canvas-guides')}
+            theme={theme}
         >
             <div className="space-y-4 mb-4">
                 <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-3">
@@ -541,9 +609,9 @@ export const SettingsPanel: React.FC = () => {
         {/* SECTION: INTERPOLATION */}
         <SettingsSection 
             title="Interpolation Engine" 
-            description="Manage how the N-Dimensional matrix calculates in-between states."
             isOpen={openSections.includes('interpolation')}
             onToggle={() => toggleSection('interpolation')}
+            theme={theme}
         >
              <SettingsToggle label="Snap Matrix Keyframes" active={ui.snapMatrixGrid} onClick={toggleSnapMatrixGrid} />
              
@@ -589,9 +657,9 @@ export const SettingsPanel: React.FC = () => {
         {/* SECTION: PERFORMANCE (MOVED BOTTOM) */}
         <SettingsSection 
             title="Performance" 
-            description="Optimize rendering for complex projects or high-resolution screens."
             isOpen={openSections.includes('performance')}
             onToggle={() => toggleSection('performance')}
+            theme={theme}
         >
              <SettingsToggle label="Performance Mode (Low Poly)" active={ui.performanceMode} onClick={togglePerformanceMode} />
              
