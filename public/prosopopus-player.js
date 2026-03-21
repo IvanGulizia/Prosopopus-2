@@ -86,22 +86,38 @@ export class ProsopopusPlayer {
     const { canvas, ctx, project, currentAxes } = this;
     const settings = project.settings || {};
     const dpr = window.devicePixelRatio || 1;
-    const w = project.canvasSize?.width || 600;
-    const h = project.canvasSize?.height || 600;
+    
+    // Get the actual display size of the canvas (responsive)
+    const rect = canvas.getBoundingClientRect();
+    const displayW = rect.width || project.canvasSize?.width || 600;
+    const displayH = rect.height || project.canvasSize?.height || 600;
+    
+    // Internal project dimensions (the "viewbox")
+    const projectW = project.canvasSize?.width || 600;
+    const projectH = project.canvasSize?.height || 600;
 
-    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-      ctx.scale(dpr, dpr);
+    // Update internal resolution to match display size * DPR
+    if (canvas.width !== Math.floor(displayW * dpr) || canvas.height !== Math.floor(displayH * dpr)) {
+      canvas.width = Math.floor(displayW * dpr);
+      canvas.height = Math.floor(displayH * dpr);
     }
 
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = settings.theme?.canvasBg || '#ffffff';
-    ctx.fillRect(0, 0, w, h);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    
+    // Scale the drawing to fit the display size while keeping project coordinates
+    const scaleX = displayW / projectW;
+    const scaleY = displayH / projectH;
+    ctx.scale(scaleX, scaleY);
 
-    if (!project.layers || !project.keyframes) return;
+    ctx.clearRect(0, 0, projectW, projectH);
+    ctx.fillStyle = settings.theme?.canvasBg || '#ffffff';
+    ctx.fillRect(0, 0, projectW, projectH);
+
+    if (!project.layers || !project.keyframes) {
+      ctx.restore();
+      return;
+    }
 
     project.layers.forEach(layer => {
       if (!layer.visible) return;
@@ -160,6 +176,8 @@ export class ProsopopusPlayer {
         }
       }
     });
+
+    ctx.restore();
   }
 
   calculateWeights(axes, keyframes, exponent = 2, strategy = 'bilinear-grid') {

@@ -693,7 +693,10 @@ export const SettingsPanel: React.FC = () => {
                         </div>
                         <div className="bg-gray-900 rounded-xl p-4 overflow-x-auto relative group">
                             <pre className="text-[9px] text-blue-300 font-mono leading-relaxed">
-{`<canvas id="prosopopus-canvas"></canvas>
+{`<div style="width: 100%; aspect-ratio: ${project.canvasSize.width}/${project.canvasSize.height}; max-width: 100%;">
+  <canvas id="prosopopus-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+</div>
+
 <script type="module">
   import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';
 
@@ -716,7 +719,7 @@ export const SettingsPanel: React.FC = () => {
                             </pre>
                             <button 
                                 onClick={() => {
-                                    const code = `<canvas id="prosopopus-canvas"></canvas>\n<script type="module">\n  import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';\n\n  async function init() {\n    try {\n      const canvas = document.querySelector('#prosopopus-canvas');\n      const response = await fetch('${embedJsonUrl || 'YOUR_JSON_URL'}');\n      if (!response.ok) throw new Error('Failed to fetch project JSON');\n      \n      const project = await response.json();\n      const player = new ProsopopusPlayer(canvas, project);\n      player.start();\n    } catch (err) {\n      console.error('Prosopopus Embed Error:', err);\n    }\n  }\n  \n  init();\n</script>`;
+                                    const code = `<div style="width: 100%; aspect-ratio: ${project.canvasSize.width}/${project.canvasSize.height}; max-width: 100%;">\n  <canvas id="prosopopus-canvas" style="width: 100%; height: 100%; display: block;"></canvas>\n</div>\n\n<script type="module">\n  import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';\n\n  async function init() {\n    try {\n      const canvas = document.querySelector('#prosopopus-canvas');\n      const response = await fetch('${embedJsonUrl || 'YOUR_JSON_URL'}');\n      if (!response.ok) throw new Error('Failed to fetch project JSON');\n      \n      const project = await response.json();\n      const player = new ProsopopusPlayer(canvas, project);\n      player.start();\n    } catch (err) {\n      console.error('Prosopopus Embed Error:', err);\n    }\n  }\n  \n  init();\n</script>`;
                                     navigator.clipboard.writeText(code);
                                 }}
                                 className="absolute top-2 right-2 bg-white/10 hover:bg-white/20 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
