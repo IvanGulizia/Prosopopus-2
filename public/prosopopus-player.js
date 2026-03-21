@@ -107,22 +107,22 @@ const upsamplePreservingCorners = (points, targetCount) => {
   return newPoints;
 };
 
-const calculateBilinearGridWeights = (currentAxes, keyframes) => {
+const calculateBilinearGridWeights = (currentAxes, keyframes, xAxisId = 'axis-x', yAxisId = 'axis-y') => {
   const weights = {};
-  const curX = currentAxes['axis-x'] || 0;
-  const curY = currentAxes['axis-y'] || 0;
-  const EPSILON = 0.005;
+  const curX = currentAxes[xAxisId] || 0;
+  const curY = currentAxes[yAxisId] || 0;
+  const EPSILON = 0.0001; // Increased precision
 
   const distinctCoords = (arr) => {
     const sorted = [...arr].sort((a, b) => a - b);
     const result = [];
     if (sorted.length > 0) result.push(sorted[0]);
-    for (let i = 1; i < sorted.length; i++) if (sorted[i] > sorted[i - 1] + EPSILON) result.push(sorted[i]);
+    for (let i = 1; i < sorted.length; i++) if (sorted[i] > sorted[i - 1] + 0.001) result.push(sorted[i]);
     return result;
   };
 
-  const xCoords = distinctCoords(keyframes.map(k => k.axisValues['axis-x'] || 0));
-  const yCoords = distinctCoords(keyframes.map(k => k.axisValues['axis-y'] || 0));
+  const xCoords = distinctCoords(keyframes.map(k => k.axisValues[xAxisId] || 0));
+  const yCoords = distinctCoords(keyframes.map(k => k.axisValues[yAxisId] || 0));
 
   if (xCoords.length === 0 || yCoords.length === 0) {
     if (keyframes.length > 0) weights[keyframes[0].id] = 1;
@@ -145,13 +145,13 @@ const calculateBilinearGridWeights = (currentAxes, keyframes) => {
   const yInfo = findInterval(curY, yCoords);
 
   const resolveCornerWeights = (targetX, targetY) => {
-    const exact = keyframes.find(k => Math.abs((k.axisValues['axis-x'] || 0) - targetX) < EPSILON && Math.abs((k.axisValues['axis-y'] || 0) - targetY) < EPSILON);
+    const exact = keyframes.find(k => Math.abs((k.axisValues[xAxisId] || 0) - targetX) < EPSILON && Math.abs((k.axisValues[yAxisId] || 0) - targetY) < EPSILON);
     if (exact) return { [exact.id]: 1.0 };
     let totalW = 0;
     const cornerWeights = {};
     keyframes.forEach(k => {
-      const dx = (k.axisValues['axis-x'] || 0) - targetX;
-      const dy = (k.axisValues['axis-y'] || 0) - targetY;
+      const dx = (k.axisValues[xAxisId] || 0) - targetX;
+      const dy = (k.axisValues[yAxisId] || 0) - targetY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const w = dist < 0.001 ? 1000 : 1 / Math.pow(dist, 2);
       cornerWeights[k.id] = w;
@@ -197,10 +197,10 @@ const calculateIDWWeights = (currentAxes, keyframes, exponent) => {
   return weights;
 };
 
-const calculateInterpolationWeights = (currentAxes, keyframes, exponent = 2, strategy = 'bilinear-grid') => {
+const calculateInterpolationWeights = (currentAxes, keyframes, exponent = 2, strategy = 'bilinear-grid', xAxisId = 'axis-x', yAxisId = 'axis-y') => {
   if (keyframes.length === 0) return {};
   if (keyframes.length === 1) return { [keyframes[0].id]: 1.0 };
-  return strategy === 'bilinear-grid' ? calculateBilinearGridWeights(currentAxes, keyframes) : calculateIDWWeights(currentAxes, keyframes, exponent);
+  return strategy === 'bilinear-grid' ? calculateBilinearGridWeights(currentAxes, keyframes, xAxisId, yAxisId) : calculateIDWWeights(currentAxes, keyframes, exponent);
 };
 
 const resolveStrokeStyle = (stroke, layer) => {
@@ -230,13 +230,20 @@ const interpolateStrokePoints = (activeKeyframes, mode = 'resample', targetCount
   const maxPts = Math.max(...activeKeyframes.map(k => k.points?.length || 0));
   if (mode === 'points' || mode === 'spline') ACTUAL_TARGET_COUNT = maxPts;
 
+  // Optimization: Pre-process points once per keyframe
+  const processedKeyframes = activeKeyframes.map(kf => {
+    const rawPoints = kf.points || [];
+    const processed = (mode === 'points' || mode === 'spline') 
+      ? (rawPoints.length === ACTUAL_TARGET_COUNT ? rawPoints : upsamplePreservingCorners(rawPoints, ACTUAL_TARGET_COUNT)) 
+      : resamplePoints(rawPoints, ACTUAL_TARGET_COUNT);
+    return { weight: kf.weight, processed };
+  });
+
   const resultPoints = [];
   for (let i = 0; i < ACTUAL_TARGET_COUNT; i++) {
     let x = 0, y = 0, pressure = 0, totalW = 0;
-    for (const kf of activeKeyframes) {
-      const rawPoints = kf.points || [];
-      const processed = (mode === 'points' || mode === 'spline') ? (rawPoints.length === ACTUAL_TARGET_COUNT ? rawPoints : upsamplePreservingCorners(rawPoints, ACTUAL_TARGET_COUNT)) : resamplePoints(rawPoints, ACTUAL_TARGET_COUNT);
-      const pt = processed[i] || processed[processed.length - 1] || { x: 0, y: 0, pressure: 0.5 };
+    for (const kf of processedKeyframes) {
+      const pt = kf.processed[i] || kf.processed[kf.processed.length - 1] || { x: 0, y: 0, pressure: 0.5 };
       x += pt.x * kf.weight; y += pt.y * kf.weight; pressure += (pt.pressure || 0.5) * kf.weight; totalW += kf.weight;
     }
     if (totalW > 0) resultPoints.push({ x: x / totalW, y: y / totalW, pressure: pressure / totalW });
@@ -305,41 +312,33 @@ export class ProsopopusPlayer {
   }
 
   setupInteraction() {
-    const updatePosition = (clientX, clientY) => {
+    const handleMove = (e) => {
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      
       const rect = this.canvas.getBoundingClientRect();
       
+      // Allow a small margin around the canvas for interaction to ensure we hit the edges (0 and 1)
+      // even if the mouse moves slightly outside the canvas area.
+      const margin = 100; 
+      if (clientX < rect.left - margin || clientX > rect.right + margin ||
+          clientY < rect.top - margin || clientY > rect.bottom + margin) {
+        return;
+      }
+
       // Calculate normalized coordinates (0 to 1) relative to the canvas
       const x = (clientX - rect.left) / rect.width;
       const y = (clientY - rect.top) / rect.height;
       
       this.targetAxes[this.xAxisId] = Math.max(0, Math.min(1, x));
       this.targetAxes[this.yAxisId] = Math.max(0, Math.min(1, y));
+      
+      // Prevent scrolling on touch devices when interacting
+      if (e.touches && e.cancelable) e.preventDefault();
     };
 
-    const handleMouseMove = (e) => {
-      updatePosition(e.clientX, e.clientY);
-    };
-
-    const handleTouchMove = (e) => {
-      if (e.touches && e.touches[0]) {
-        updatePosition(e.touches[0].clientX, e.touches[0].clientY);
-        // Prevent scrolling when interacting with the canvas
-        if (e.cancelable) e.preventDefault();
-      }
-    };
-
-    // Listen strictly on the canvas to avoid interference between multiple instances
-    this.canvas.addEventListener('mousemove', handleMouseMove);
-    this.canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-    
-    // Optional: Handle mouse leave to ensure we hit the edges if moving fast
-    this.canvas.addEventListener('mouseleave', (e) => {
-      const rect = this.canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
-      this.targetAxes[this.xAxisId] = Math.max(0, Math.min(1, x));
-      this.targetAxes[this.yAxisId] = Math.max(0, Math.min(1, y));
-    });
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('touchmove', handleMove, { passive: false });
   }
 
   start() {
@@ -424,7 +423,7 @@ export class ProsopopusPlayer {
       
       if (relevantKfs.length === 0) return;
 
-      const weights = calculateInterpolationWeights(currentAxes, relevantKfs, settings.interpolationExponent, settings.interpolationStrategy);
+      const weights = calculateInterpolationWeights(currentAxes, relevantKfs, settings.interpolationExponent, settings.interpolationStrategy, this.xAxisId, this.yAxisId);
       const activeKfs = relevantKfs.map(k => ({ ...k, weight: weights[k.id] || 0 })).filter(k => k.weight > 0.0001);
       
       if (activeKfs.length === 0) return;
