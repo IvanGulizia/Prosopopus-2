@@ -705,6 +705,7 @@ export const SettingsPanel: React.FC = () => {
 
   async function init() {
     try {
+      // Find the specific container we just created
       const containers = document.querySelectorAll('.prosopopus-container');
       const container = containers[containers.length - 1];
       const canvas = container.querySelector('.prosopopus-canvas');

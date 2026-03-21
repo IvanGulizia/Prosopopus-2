@@ -305,10 +305,8 @@ export class ProsopopusPlayer {
   }
 
   setupInteraction() {
-    const handleMove = (e) => {
+    const updatePosition = (clientX, clientY) => {
       const rect = this.canvas.getBoundingClientRect();
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
       
       // Calculate normalized coordinates (0 to 1) relative to the canvas
       const x = (clientX - rect.left) / rect.width;
@@ -318,9 +316,30 @@ export class ProsopopusPlayer {
       this.targetAxes[this.yAxisId] = Math.max(0, Math.min(1, y));
     };
 
-    // Track movement on the whole window to avoid "stuck" states when leaving the canvas
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('touchmove', handleMove, { passive: false });
+    const handleMouseMove = (e) => {
+      updatePosition(e.clientX, e.clientY);
+    };
+
+    const handleTouchMove = (e) => {
+      if (e.touches && e.touches[0]) {
+        updatePosition(e.touches[0].clientX, e.touches[0].clientY);
+        // Prevent scrolling when interacting with the canvas
+        if (e.cancelable) e.preventDefault();
+      }
+    };
+
+    // Listen strictly on the canvas to avoid interference between multiple instances
+    this.canvas.addEventListener('mousemove', handleMouseMove);
+    this.canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    
+    // Optional: Handle mouse leave to ensure we hit the edges if moving fast
+    this.canvas.addEventListener('mouseleave', (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      this.targetAxes[this.xAxisId] = Math.max(0, Math.min(1, x));
+      this.targetAxes[this.yAxisId] = Math.max(0, Math.min(1, y));
+    });
   }
 
   start() {
