@@ -6,7 +6,8 @@ import { APP_COLORS, PALETTE_COLORS } from '../constants';
 
 const Icons = {
   Cursor: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 4 7.07 17 2.51-7.39L21 11.07z"/></svg>,
-  Select: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>,
+  Select: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="5" y="5" rx="2"/><path d="M2 2v6"/><path d="M2 2h6"/><path d="M22 2v6"/><path d="M22 2h-6"/><path d="M2 22v-6"/><path d="M2 22h6"/><path d="M22 22v-6"/><path d="M22 22h-6"/></svg>,
+  Points: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v18"/><path d="M3 12h18"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="3" r="2"/><circle cx="12" cy="21" r="2"/><circle cx="3" cy="12" r="2"/><circle cx="21" cy="12" r="2"/></svg>,
   Pen: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>,
   // UPDATED ICON: Shows explicit nodes and connections
   PolyIcon: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 7 3 10 8-12"/><circle cx="7" cy="7" r="2"/><circle cx="10" cy="17" r="2"/><circle cx="18" cy="5" r="2"/></svg>,
@@ -21,7 +22,7 @@ const Icons = {
 const STROKE_SIZES = [2, 4, 8, 12, 16];
 
 export const Toolbar: React.FC = () => {
-  const { ui, setTool, undo, redo, history, toggleSettings, setMode, setBrushColor, setFillColor, setBrushSize, closeAllPanels } = useStore();
+  const { ui, setTool, undo, redo, history, toggleSettings, setMode, setBrushColor, setFillColor, setBrushSize, closeAllPanels, toggleTransformMode } = useStore();
   const [activeColorPicker, setActiveColorPicker] = useState<'stroke' | 'fill' | 'size' | null>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   
@@ -39,9 +40,13 @@ export const Toolbar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [activeColorPicker]);
 
-  const ToolButton = ({ tool, icon: Icon, label }: { tool: ToolType; icon: any; label: string }) => (
+  const ToolButton = ({ tool, icon: Icon, label, onClick }: { tool: ToolType; icon: any; label: string, onClick?: () => void }) => (
     <button
-      onClick={(e) => { e.stopPropagation(); setTool(tool); }}
+      onClick={(e) => { 
+        e.stopPropagation(); 
+        if (onClick) onClick();
+        else setTool(tool); 
+      }}
       disabled={isPlayMode}
       className={`p-2.5 rounded-full transition-all duration-200 flex items-center justify-center group relative
         ${ui.selectedTool === tool && !isPlayMode
@@ -79,7 +84,18 @@ export const Toolbar: React.FC = () => {
 
         {/* Tools */}
         <div className={`flex items-center gap-1 transition-opacity ${isPlayMode ? 'opacity-30 pointer-events-none grayscale' : 'opacity-100'}`}>
-          <ToolButton tool="select" icon={Icons.Select} label="Transform" />
+          <ToolButton 
+            tool="select" 
+            icon={ui.transformMode === 'object' ? Icons.Select : Icons.Points} 
+            label={ui.transformMode === 'object' ? "Transform" : "Edit Points"} 
+            onClick={() => {
+                if (ui.selectedTool === 'select') {
+                    toggleTransformMode();
+                } else {
+                    setTool('select');
+                }
+            }}
+          />
           <ToolButton tool="pen" icon={Icons.Pen} label="Pen" />
           <ToolButton tool="polyline" icon={Icons.PolyIcon} label="Polyline" />
           

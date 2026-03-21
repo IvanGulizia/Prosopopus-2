@@ -294,15 +294,17 @@ export const SettingsPanel: React.FC = () => {
       togglePlayModePhysics, setSpringStiffness, setSpringDamping,
       setLayerCornerRoundness, setStrokeCap,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
-      updateCanvasSize
+      updateCanvasSize, renameProject
   } = useStore();
   
   const { theme, isSettingsOpen } = ui;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [openSections, setOpenSections] = useState<string[]>(['layer-styles']);
+  const [openSections, setOpenSections] = useState<string[]>(['layer-styles', 'embed']);
   const [applyToAllStates, setApplyToAllStates] = useState(false);
+  const [embedJsonUrl, setEmbedJsonUrl] = useState('');
 
   const [isExporting, setIsExporting] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [exportFileName, setExportFileName] = useState(project.name);
 
   const toggleSection = (section: string) => {
@@ -324,6 +326,7 @@ export const SettingsPanel: React.FC = () => {
       e.preventDefault();
       e.stopPropagation();
       resetProject();
+      setIsResetting(false);
   };
 
   const handleExport = () => {
@@ -410,6 +413,18 @@ export const SettingsPanel: React.FC = () => {
 
       <div className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
         
+        {/* SECTION: PROJECT NAME */}
+        <div className="space-y-2 mb-6">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Project Name</label>
+            <input 
+                type="text" 
+                value={project.name}
+                onChange={(e) => renameProject(e.target.value)}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                placeholder="Untitled Project"
+            />
+        </div>
+
         {/* SECTION: LAYER GLOBAL STYLES */}
         <SettingsSection 
             title="Layer Global Styles" 
@@ -474,7 +489,7 @@ export const SettingsPanel: React.FC = () => {
             theme={theme}
         >
              <div className="grid grid-cols-2 gap-3 mb-4">
-                 <button onClick={() => setIsExporting(true)} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
+                 <button onClick={() => { setExportFileName(project.name); setIsExporting(true); }} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     Export JSON
                  </button>
@@ -487,11 +502,11 @@ export const SettingsPanel: React.FC = () => {
 
              <div className="border-t border-gray-100 pt-4">
                 <button 
-                    onClick={handleReset}
+                    onClick={() => setIsResetting(true)}
                     className="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-xs font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2 group"
                 >
                     <svg className="group-hover:scale-110 transition-transform" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                    Reset
+                    Reset Project
                 </button>
              </div>
         </SettingsSection>
@@ -606,6 +621,114 @@ export const SettingsPanel: React.FC = () => {
              </div>
         </SettingsSection>
 
+        {/* SECTION: EMBED */}
+        <SettingsSection 
+            title="Embed on Website" 
+            isOpen={openSections.includes('embed')}
+            onToggle={() => toggleSection('embed')}
+            theme={theme}
+        >
+            <div className="space-y-6">
+                <div className="space-y-4">
+                    {/* STEP 1 */}
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold">1</span>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Copy Project Data</label>
+                        </div>
+                        <button 
+                            onClick={() => {
+                                const projectWithSettings = {
+                                    ...project,
+                                    settings: {
+                                        theme: ui.theme,
+                                        playModePhysics: ui.playModePhysics,
+                                        springStiffness: ui.springStiffness,
+                                        springDamping: ui.springDamping,
+                                        interpolationStrategy: ui.interpolationStrategy,
+                                        resolutionScale: ui.resolutionScale,
+                                    }
+                                };
+                                navigator.clipboard.writeText(JSON.stringify(projectWithSettings, null, 2));
+                            }}
+                            className="w-full py-2.5 px-4 rounded-xl text-[11px] font-bold transition-all border border-blue-100 bg-blue-50/50 text-blue-600 hover:bg-blue-100 flex items-center justify-center gap-2"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            Copy current project JSON
+                        </button>
+                    </div>
+
+                    {/* STEP 2 */}
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold">2</span>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Host your JSON</label>
+                        </div>
+                        <p className="text-[11px] text-gray-500 leading-relaxed">
+                            Paste the JSON into a new <a href="https://gist.github.com" target="_blank" className="text-blue-500 hover:underline font-medium">GitHub Gist</a> and click "Create public gist".
+                        </p>
+                    </div>
+
+                    {/* STEP 3 */}
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold">3</span>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Paste Raw URL</label>
+                        </div>
+                        <input 
+                            type="text" 
+                            value={embedJsonUrl}
+                            onChange={(e) => setEmbedJsonUrl(e.target.value)}
+                            placeholder="https://gist.githubusercontent.com/.../raw/project.json"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[11px] focus:ring-2 focus:ring-blue-500/20 outline-none"
+                        />
+                        <p className="text-[9px] text-gray-400 italic">Make sure to use the "Raw" URL from Gist.</p>
+                    </div>
+
+                    {/* STEP 4 */}
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold">4</span>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Embed Code</label>
+                        </div>
+                        <div className="bg-gray-900 rounded-xl p-4 overflow-x-auto relative group">
+                            <pre className="text-[9px] text-blue-300 font-mono leading-relaxed">
+{`<canvas id="prosopopus-canvas"></canvas>
+<script type="module">
+  import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';
+
+  async function init() {
+    try {
+      const canvas = document.querySelector('#prosopopus-canvas');
+      const response = await fetch('${embedJsonUrl || 'YOUR_JSON_URL'}');
+      if (!response.ok) throw new Error('Failed to fetch project JSON');
+      
+      const project = await response.json();
+      const player = new ProsopopusPlayer(canvas, project);
+      player.start();
+    } catch (err) {
+      console.error('Prosopopus Embed Error:', err);
+    }
+  }
+  
+  init();
+</script>`}
+                            </pre>
+                            <button 
+                                onClick={() => {
+                                    const code = `<canvas id="prosopopus-canvas"></canvas>\n<script type="module">\n  import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';\n\n  async function init() {\n    try {\n      const canvas = document.querySelector('#prosopopus-canvas');\n      const response = await fetch('${embedJsonUrl || 'YOUR_JSON_URL'}');\n      if (!response.ok) throw new Error('Failed to fetch project JSON');\n      \n      const project = await response.json();\n      const player = new ProsopopusPlayer(canvas, project);\n      player.start();\n    } catch (err) {\n      console.error('Prosopopus Embed Error:', err);\n    }\n  }\n  \n  init();\n</script>`;
+                                    navigator.clipboard.writeText(code);
+                                }}
+                                className="absolute top-2 right-2 bg-white/10 hover:bg-white/20 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                                Copy
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </SettingsSection>
+
         {/* SECTION: INTERPOLATION */}
         <SettingsSection 
             title="Interpolation Engine" 
@@ -681,6 +804,89 @@ export const SettingsPanel: React.FC = () => {
         </SettingsSection>
 
       </div>
+
+      {/* Export Modal Overlay */}
+      {isExporting && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div 
+            className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border overflow-hidden animate-in zoom-in-95 duration-200"
+            style={{ borderColor: theme.border }}
+          >
+            <div className="p-6 space-y-4">
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-gray-900">Export Project</h3>
+                <p className="text-xs text-gray-500">Choose a name for your JSON file</p>
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">File Name</label>
+                <input 
+                  type="text" 
+                  value={exportFileName}
+                  onChange={(e) => setExportFileName(e.target.value)}
+                  autoFocus
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                  placeholder="my-project"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleExport();
+                    if (e.key === 'Escape') setIsExporting(false);
+                  }}
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={() => setIsExporting(false)}
+                  className="flex-1 py-3 text-xs font-bold text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleExport}
+                  className="flex-1 py-3 text-xs font-bold text-white bg-blue-500 hover:bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 transition-all active:scale-95"
+                >
+                  Export
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Confirmation Modal */}
+      {isResetting && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div 
+            className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border overflow-hidden animate-in zoom-in-95 duration-200"
+            style={{ borderColor: theme.border }}
+          >
+            <div className="p-6 space-y-4 text-center">
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 className="text-red-500" size={32} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-gray-900">Reset Project?</h3>
+                <p className="text-xs text-gray-500">This will permanently delete all layers and strokes. This action cannot be undone.</p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={() => setIsResetting(false)}
+                  className="flex-1 py-3 text-xs font-bold text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleReset}
+                  className="flex-1 py-3 text-xs font-bold text-white bg-red-500 hover:bg-red-600 rounded-xl shadow-lg shadow-red-500/20 transition-all active:scale-95"
+                >
+                  Reset Everything
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

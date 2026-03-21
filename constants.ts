@@ -38,7 +38,8 @@ export const DEFAULT_LAYER: Layer = {
     strokeWidth: 4,
     fillColor: 'none',
     lineStyle: 'solid',
-    cornerRoundness: 0
+    cornerRoundness: 0,
+    strokeCap: 'round'
   }
 };
 
@@ -86,10 +87,13 @@ export const INITIAL_UI_STATE: UIState = {
   selectedLayerId: INITIAL_LAYER_ID,
   selectedKeyframeId: 'kf-origin',
   selectedStrokeId: null,
+  transformMode: 'object',
   
   isPlaying: false,
   isLayerPanelOpen: true,
   isSettingsOpen: false,
+  isExporting: false,
+  exportFileName: 'my-project',
   isDebugMenuOpen: false,
 
   theme: INITIAL_THEME,

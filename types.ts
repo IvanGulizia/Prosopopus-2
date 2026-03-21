@@ -21,6 +21,7 @@ export interface StyleProps {
   fillColor: string | 'none';
   lineStyle: LineStyle;
   cornerRoundness?: number; // 0 to 100
+  strokeCap?: 'round' | 'butt' | 'square';
 }
 
 export interface Stroke {
@@ -113,10 +114,13 @@ export interface UIState {
   selectedLayerId: string | null;
   selectedKeyframeId: string | null;
   selectedStrokeId: string | null; // For Selection Tool
+  transformMode: 'object' | 'points';
   
   isPlaying: boolean;
   isLayerPanelOpen: boolean;
   isSettingsOpen: boolean;
+  isExporting: boolean;
+  exportFileName: string;
   isDebugMenuOpen: boolean;
   
   // Theme

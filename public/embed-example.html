@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prosopopus Embed Example</title>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f0f0; font-family: sans-serif; }
+        .container { background: white; padding: 20px; border-radius: 24px; shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; }
+        canvas { border: 1px solid #eee; border-radius: 12px; cursor: crosshair; max-width: 100%; height: auto; }
+        h1 { font-size: 1.2rem; margin-bottom: 20px; color: #333; }
+        p { font-size: 0.9rem; color: #666; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <canvas id="prosopopus-canvas"></canvas>
+
+    <script type="module">
+        import { ProsopopusPlayer } from '../src/player.ts';
+        
+        async function init() {
+            const canvas = document.getElementById('prosopopus-canvas');
+            
+            // For this example, we'll fetch a dummy project or the user can paste theirs
+            // In a real embed, this would be the URL to the JSON file
+            try {
+                const response = await fetch('/project-example.json'); // You might need to create this or use a fallback
+                const project = await response.json();
+                
+                const player = new ProsopopusPlayer(canvas, project);
+                player.start();
+            } catch (e) {
+                console.error("Failed to load project for example", e);
+            }
+        }
+        
+        init();
+    </script>
+</body>
+</html>

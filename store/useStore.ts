@@ -85,6 +85,7 @@ interface StoreState {
   updateAxisValue: (axisId: string, value: number) => void;
   updateMultipleAxisValues: (values: Record<string, number>) => void;
   updateCanvasSize: (width: number, height: number) => void; // Batch update
+  renameProject: (name: string) => void;
   
   addStrokeToCurrentKeyframe: (points: Point[], closed?: boolean, skipSimplify?: boolean) => void; 
   updateStrokeInCurrentKeyframe: (strokeId: string, newPoints: Point[]) => void;
@@ -187,6 +188,10 @@ export const useStore = create<StoreState>((set, get) => ({
           history: { past: [], future: [] }
       };
   }),
+
+  renameProject: (name: string) => set((state) => ({
+      project: { ...state.project, name }
+  })),
 
   loadProject: (project) => set((state) => ({
       project: project,
