@@ -280,9 +280,25 @@ export class ProsopopusPlayer {
     if (!ctx) throw new Error('Could not get canvas context');
     this.ctx = ctx;
     this.project = project;
-    this.currentAxes = { 'axis-x': 0.5, 'axis-y': 0.5 };
-    this.targetAxes = { 'axis-x': 0.5, 'axis-y': 0.5 };
-    this.velocity = { x: 0, y: 0 };
+    
+    // Find the axes that should be mapped to the mouse
+    this.xAxisId = project.axes?.find(a => a.type === 'mouseX')?.id || 'axis-x';
+    this.yAxisId = project.axes?.find(a => a.type === 'mouseY')?.id || 'axis-y';
+    
+    this.currentAxes = {};
+    this.targetAxes = {};
+    
+    // Initialize all axes to their default values
+    project.axes?.forEach(axis => {
+      this.currentAxes[axis.id] = axis.currentValue ?? 0.5;
+      this.targetAxes[axis.id] = axis.currentValue ?? 0.5;
+    });
+
+    this.velocity = {};
+    project.axes?.forEach(axis => {
+      this.velocity[axis.id] = 0;
+    });
+
     this.lastTime = 0;
     this.isRunning = false;
     this.setupInteraction();
@@ -294,19 +310,17 @@ export class ProsopopusPlayer {
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
       
-      // Calculate normalized coordinates (0 to 1)
+      // Calculate normalized coordinates (0 to 1) relative to the canvas
       const x = (clientX - rect.left) / rect.width;
       const y = (clientY - rect.top) / rect.height;
       
-      this.targetAxes['axis-x'] = Math.max(0, Math.min(1, x));
-      this.targetAxes['axis-y'] = Math.max(0, Math.min(1, y));
+      this.targetAxes[this.xAxisId] = Math.max(0, Math.min(1, x));
+      this.targetAxes[this.yAxisId] = Math.max(0, Math.min(1, y));
     };
 
-    this.canvas.addEventListener('mousemove', handleMove);
-    this.canvas.addEventListener('touchmove', handleMove, { passive: false });
-    
-    // Also handle mouse leaving the canvas to "reset" or keep last position
-    // For now, we just keep the last position.
+    // Track movement on the whole window to avoid "stuck" states when leaving the canvas
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('touchmove', handleMove, { passive: false });
   }
 
   start() {
@@ -331,21 +345,19 @@ export class ProsopopusPlayer {
 
   updatePhysics(dt) {
     const settings = this.project.settings || {};
-    if (settings.playModePhysics) {
-      const stiffness = settings.springStiffness || 120;
-      const damping = settings.springDamping || 20;
-      const fx = (this.targetAxes['axis-x'] - this.currentAxes['axis-x']) * stiffness - this.velocity.x * damping;
-      const fy = (this.targetAxes['axis-y'] - this.currentAxes['axis-y']) * stiffness - this.velocity.y * damping;
-      this.velocity.x += fx * dt;
-      this.velocity.y += fy * dt;
-      this.currentAxes['axis-x'] += this.velocity.x * dt;
-      this.currentAxes['axis-y'] += this.velocity.y * dt;
-    } else {
-      this.currentAxes['axis-x'] = this.targetAxes['axis-x'];
-      this.currentAxes['axis-y'] = this.targetAxes['axis-y'];
+    const stiffness = settings.springStiffness || 120;
+    const damping = settings.springDamping || 20;
+
+    for (const axisId in this.targetAxes) {
+      if (settings.playModePhysics) {
+        const force = (this.targetAxes[axisId] - this.currentAxes[axisId]) * stiffness - (this.velocity[axisId] || 0) * damping;
+        this.velocity[axisId] = (this.velocity[axisId] || 0) + force * dt;
+        this.currentAxes[axisId] = (this.currentAxes[axisId] || 0) + this.velocity[axisId] * dt;
+      } else {
+        this.currentAxes[axisId] = this.targetAxes[axisId];
+      }
+      this.currentAxes[axisId] = Math.max(0, Math.min(1, this.currentAxes[axisId]));
     }
-    this.currentAxes['axis-x'] = Math.max(0, Math.min(1, this.currentAxes['axis-x']));
-    this.currentAxes['axis-y'] = Math.max(0, Math.min(1, this.currentAxes['axis-y']));
   }
 
   render() {
@@ -353,16 +365,15 @@ export class ProsopopusPlayer {
     const settings = project.settings || {};
     const dpr = window.devicePixelRatio || 1;
     
-    // Get the actual display size of the canvas (responsive)
     const rect = canvas.getBoundingClientRect();
-    const displayW = rect.width || project.canvasSize?.width || 600;
-    const displayH = rect.height || project.canvasSize?.height || 600;
+    const displayW = rect.width;
+    const displayH = rect.height;
     
-    // Internal project dimensions (the "viewbox")
+    if (displayW === 0 || displayH === 0) return;
+
     const projectW = project.canvasSize?.width || 600;
     const projectH = project.canvasSize?.height || 600;
 
-    // Update internal resolution to match display size * DPR
     if (canvas.width !== Math.floor(displayW * dpr) || canvas.height !== Math.floor(displayH * dpr)) {
       canvas.width = Math.floor(displayW * dpr);
       canvas.height = Math.floor(displayH * dpr);
@@ -371,7 +382,6 @@ export class ProsopopusPlayer {
     ctx.save();
     ctx.scale(dpr, dpr);
     
-    // Scale the drawing to fit the display size while keeping project coordinates
     const scaleX = displayW / projectW;
     const scaleY = displayH / projectH;
     ctx.scale(scaleX, scaleY);
@@ -418,7 +428,7 @@ export class ProsopopusPlayer {
       const { points, color, fillColor, width, cornerRoundness } = interpolateStrokePoints(strokeData, layer.interpolationMode, settings.performanceMode ? 80 : 200);
       
       if (points.length > 0) {
-        ctx.globalAlpha = layer.opacity || 1;
+        ctx.globalAlpha = layer.opacity ?? 1;
         ctx.lineCap = settings.strokeCap || 'round';
         ctx.lineJoin = 'round';
 
