@@ -312,7 +312,7 @@ export class ProsopopusPlayer {
   }
 
   setupInteraction() {
-    const handleMove = (e) => {
+    this.handleMove = (e) => {
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
       
@@ -337,8 +337,8 @@ export class ProsopopusPlayer {
       if (e.touches && e.cancelable) e.preventDefault();
     };
 
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('mousemove', this.handleMove);
+    window.addEventListener('touchmove', this.handleMove, { passive: false });
   }
 
   start() {
@@ -348,6 +348,14 @@ export class ProsopopusPlayer {
 
   stop() {
     this.isRunning = false;
+  }
+
+  destroy() {
+    this.stop();
+    if (this.handleMove) {
+      window.removeEventListener('mousemove', this.handleMove);
+      window.removeEventListener('touchmove', this.handleMove);
+    }
   }
 
   loop(time) {
