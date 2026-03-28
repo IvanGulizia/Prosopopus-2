@@ -29,6 +29,7 @@ interface StoreState {
   closeAllPanels: () => void; // Used for clicking outside
 
   setMode: (mode: UIMode) => void;
+  toggleTransformMode: () => void;
 
   setTool: (tool: ToolType) => void;
   setBrushColor: (color: string) => void;
@@ -267,6 +268,13 @@ export const useStore = create<StoreState>((set, get) => ({
       }
     };
   }),
+
+  toggleTransformMode: () => set((state) => ({
+    ui: {
+      ...state.ui,
+      transformMode: state.ui.transformMode === 'object' ? 'points' : 'object'
+    }
+  })),
 
   setTool: (tool) => set((state) => ({ 
       ui: { 

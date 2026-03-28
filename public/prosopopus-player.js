@@ -458,6 +458,15 @@ export class ProsopopusPlayer {
         ctx.lineCap = settings.strokeCap || 'round';
         ctx.lineJoin = 'round';
 
+        switch(layer.blendMode) {
+          case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+          case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+          case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+          case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+          case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+          default: ctx.globalCompositeOperation = 'source-over';
+        }
+
         if (layer.interpolationMode === 'spline') {
           drawCatmullRomSpline(ctx, points, 0.5);
         } else if (cornerRoundness > 0) {
@@ -477,6 +486,8 @@ export class ProsopopusPlayer {
           ctx.lineWidth = width;
           ctx.stroke();
         }
+        
+        ctx.globalCompositeOperation = 'source-over';
       }
     });
 
