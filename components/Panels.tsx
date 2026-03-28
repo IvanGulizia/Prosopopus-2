@@ -694,41 +694,18 @@ export const SettingsPanel: React.FC = () => {
                         <div className="bg-gray-900 rounded-xl p-4 overflow-x-auto relative group">
                             <pre className="text-[9px] text-blue-300 font-mono leading-relaxed">
 {`<!-- Prosopopus Player Instance -->
-<div class="prosopopus-embed" data-url="${embedJsonUrl || 'YOUR_JSON_URL'}" style="width: 100%; height: 100%; min-height: 100px; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-  <div class="prosopopus-container" style="width: 100%; aspect-ratio: ${project.canvasSize.width}/${project.canvasSize.height}; max-width: 100%; max-height: 100%; position: relative;">
-    <canvas class="prosopopus-canvas" style="width: 100%; height: 100%; display: block; padding: 0; margin: 0; border: none; box-sizing: border-box;"></canvas>
-  </div>
-</div>
-
-<script type="module">
-  import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';
-
-  async function init() {
-    const embeds = document.querySelectorAll('.prosopopus-embed:not(.initialized)');
-    for (const embed of embeds) {
-      embed.classList.add('initialized');
-      try {
-        const canvas = embed.querySelector('.prosopopus-canvas');
-        const url = embed.dataset.url;
-        
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('Failed to fetch project JSON');
-        
-        const project = await response.json();
-        const player = new ProsopopusPlayer(canvas, project);
-        player.start();
-      } catch (err) {
-        console.error('Prosopopus Embed Error:', err);
-      }
-    }
-  }
-  
-  init();
-</script>`}
+<iframe 
+  src="${window.location.origin}/embed.html?url=${encodeURIComponent(embedJsonUrl || 'YOUR_JSON_URL')}" 
+  width="100%" 
+  height="100%" 
+  style="border: none; aspect-ratio: ${project.canvasSize.width}/${project.canvasSize.height}; max-width: 100%;" 
+  allow="pointer-lock;" 
+  scrolling="no"
+></iframe>`}
                             </pre>
                             <button 
                                 onClick={() => {
-                                    const code = `<!-- Prosopopus Player Instance -->\n<div class="prosopopus-embed" data-url="${embedJsonUrl || 'YOUR_JSON_URL'}" style="width: 100%; height: 100%; min-height: 100px; display: flex; align-items: center; justify-content: center; overflow: hidden;">\n  <div class="prosopopus-container" style="width: 100%; aspect-ratio: ${project.canvasSize.width}/${project.canvasSize.height}; max-width: 100%; max-height: 100%; position: relative;">\n    <canvas class="prosopopus-canvas" style="width: 100%; height: 100%; display: block; padding: 0; margin: 0; border: none; box-sizing: border-box;"></canvas>\n  </div>\n</div>\n\n<script type="module">\n  import { ProsopopusPlayer } from '${window.location.origin}/prosopopus-player.js';\n\n  async function init() {\n    const embeds = document.querySelectorAll('.prosopopus-embed:not(.initialized)');\n    for (const embed of embeds) {\n      embed.classList.add('initialized');\n      try {\n        const canvas = embed.querySelector('.prosopopus-canvas');\n        const url = embed.dataset.url;\n        \n        const response = await fetch(url);\n        if (!response.ok) throw new Error('Failed to fetch project JSON');\n        \n        const project = await response.json();\n        const player = new ProsopopusPlayer(canvas, project);\n        player.start();\n      } catch (err) {\n        console.error('Prosopopus Embed Error:', err);\n      }\n    }\n  }\n  \n  init();\n</script>`;
+                                    const code = `<!-- Prosopopus Player Instance -->\n<iframe \n  src="${window.location.origin}/embed.html?url=${encodeURIComponent(embedJsonUrl || 'YOUR_JSON_URL')}" \n  width="100%" \n  height="100%" \n  style="border: none; aspect-ratio: ${project.canvasSize.width}/${project.canvasSize.height}; max-width: 100%;" \n  allow="pointer-lock;" \n  scrolling="no"\n></iframe>`;
                                     navigator.clipboard.writeText(code);
                                 }}
                                 className="absolute top-2 right-2 bg-white/10 hover:bg-white/20 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
