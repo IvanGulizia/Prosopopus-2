@@ -112,17 +112,20 @@ export const INITIAL_UI_STATE: UIState = {
   interpolationExponent: 2.0, // Default for IDW mode if switched
   
   playModePhysics: true, // DEFAULT ENABLED
-  springStiffness: 120, // High stiffness = Fast response
-  springDamping: 20,    // Critical damping-ish to avoid wobble
+  springStiffness: 250, // High stiffness = Fast response
+  springDamping: 15,    // Critical damping-ish to avoid wobble
 
   gridSize: 40, 
   
   smoothingEnabled: true, // DEFAULT TRUE (Smooth curves)
   onionSkinEnabled: true,
   onionSkinOpacity: 0.15,
+  onionSkinMode: 'both',
   inactiveLayerOpacity: 0.3,
+  inactiveLayerMode: 'dimmed',
 
   ghostStrokeOpacity: 0.4,
+  redrawGhostOpacity: 0.25,
 
   zoom: 1,
   pan: { x: 0, y: 0 },
@@ -130,6 +133,16 @@ export const INITIAL_UI_STATE: UIState = {
   brushColor: '#000000',
   fillColor: 'none', 
   cornerRoundness: 0,
+  strokeResolution: 200,
+
+  // Symmetry
+  symmetryEnabled: false,
+  symmetryType: 'vertical',
+  symmetryAxisX: 300,
+  symmetryAxisY: 300,
+  symmetryRadialCount: 4,
+  symmetryTarget: 'merge',
+  showSymmetryAxis: true,
 
   resolutionScale: 1.5, // Crisp default without killing FPS (Retina is usually 2 or 3)
   performanceMode: true, // DEFAULT: ECO MODE

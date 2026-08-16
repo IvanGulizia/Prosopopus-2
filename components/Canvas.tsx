@@ -1,7 +1,7 @@
 // components/Canvas.tsx
 import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
-import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment } from '../utils/math';
+import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment, getSymmetricPoints } from '../utils/math';
 import { resolveStrokeStyle } from '../utils/style';
 import { Point } from '../types';
 import { APP_COLORS } from '../constants';
@@ -16,7 +16,7 @@ export const Canvas: React.FC = () => {
   const { 
       ui, project, updateAxisValue, updateMultipleAxisValues, 
       addStrokeToCurrentKeyframe, updateStrokeInCurrentKeyframe, selectStroke,
-      undo, redo, deleteStroke 
+      undo, redo, deleteStroke, setTransformMode
   } = useStore();
   
   // -- Stable Refs for Animation Loop --
@@ -68,17 +68,17 @@ export const Canvas: React.FC = () => {
   const activeVertexIndexRef = useRef<number | null>(null);
   useEffect(() => { activeVertexIndexRef.current = activeVertexIndex; }, [activeVertexIndex]);
   
-  const [isVertexMode, setIsVertexMode] = useState(false);
+  const isVertexMode = ui.transformMode === 'points';
   const isVertexModeRef = useRef(false);
   useEffect(() => { isVertexModeRef.current = isVertexMode; }, [isVertexMode]);
 
   const ignoreNextContextMenuRef = useRef(false);
 
   useEffect(() => {
-      if (!ui.selectedStrokeId) {
-          setIsVertexMode(false);
+      if (!ui.selectedStrokeId && ui.transformMode === 'points') {
+          setTransformMode('object');
       }
-  }, [ui.selectedStrokeId]);
+  }, [ui.selectedStrokeId, ui.transformMode, setTransformMode]);
 
   const setInteractionMode = (mode: InteractionMode) => {
       interactionModeRef.current = mode;
@@ -170,7 +170,7 @@ export const Canvas: React.FC = () => {
       }
 
       if (ui.selectedTool === 'select' && ui.selectedStrokeId) {
-           setIsVertexMode(true); 
+           setTransformMode('points'); 
       }
   };
 
@@ -181,7 +181,7 @@ export const Canvas: React.FC = () => {
           setPolylinePoints([]);
       } else if (isVertexMode) {
           // Exit vertex mode
-          setIsVertexMode(false); 
+          setTransformMode('object'); 
       } else {
           // Deselect everything
           setInteractionMode('none'); 
@@ -400,7 +400,7 @@ export const Canvas: React.FC = () => {
                  return;
              }
              selectStroke(null);
-             setIsVertexMode(false); 
+             setTransformMode('object'); 
         }
         return;
     }
@@ -697,43 +697,149 @@ export const Canvas: React.FC = () => {
         }
       }
 
+      // --- SYMMETRY GUIDES (Visual axis feedback) ---
+      if (currentUI.symmetryEnabled && currentUI.showSymmetryAxis && currentUI.mode === 'edit') {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+
+        const ax = currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2);
+        const ay = currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2);
+
+        if (currentUI.symmetryType === 'vertical' || currentUI.symmetryType === 'quad') {
+          ctx.beginPath();
+          ctx.moveTo(ax, 0);
+          ctx.lineTo(ax, CANVAS_HEIGHT);
+          ctx.stroke();
+        }
+
+        if (currentUI.symmetryType === 'horizontal' || currentUI.symmetryType === 'quad') {
+          ctx.beginPath();
+          ctx.moveTo(0, ay);
+          ctx.lineTo(CANVAS_WIDTH, ay);
+          ctx.stroke();
+        }
+
+        if (currentUI.symmetryType === 'radial') {
+          const count = Math.max(2, Math.min(12, currentUI.symmetryRadialCount || 4));
+          const maxR = Math.hypot(CANVAS_WIDTH, CANVAS_HEIGHT);
+          for (let k = 0; k < count; k++) {
+            const angle = (k * 2 * Math.PI) / count;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax + Math.cos(angle) * maxR, ay + Math.sin(angle) * maxR);
+            ctx.stroke();
+          }
+        }
+
+        // Draw center origin marker
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#3B82F6';
+        ctx.beginPath();
+        ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
       if (currentUI.onionSkinEnabled && currentUI.mode === 'edit') {
+         const onionMode = currentUI.onionSkinMode || 'both';
+
          currentProject.keyframes.forEach(kf => {
            if (kf.id === currentUI.selectedKeyframeId) return; 
-           ctx.globalAlpha = currentUI.onionSkinOpacity;
+           
            kf.layerStates.forEach(ls => {
               if (ls.layerId !== currentUI.selectedLayerId) return;
               const stroke = ls.strokes[0];
               if (stroke && stroke.points.length > 1) {
                 const targetLayer = currentProject.layers.find(l => l.id === ls.layerId);
                 const isSpline = targetLayer?.interpolationMode === 'spline';
+                const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
+                const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
 
-                if (isSpline) {
-                     drawCatmullRomSpline(ctx, stroke.points, 0.5);
-                     ctx.stroke();
-                } else {
-                    ctx.beginPath();
-                    const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
-                    const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
-                    if (cornerRoundness > 0) {
-                       drawCornerRoundedPath(ctx, stroke.points, cornerRoundness);
-                    } else {
-                       ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-                       for (let i = 1; i < stroke.points.length; i++) ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-                    }
-                    ctx.strokeStyle = '#3B82F6'; 
-                    ctx.lineWidth = 1; 
-                    ctx.stroke();
+                const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (
+                  (targetLayer?.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
+                    enabled: true,
+                    type: currentUI.symmetryType,
+                    axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
+                    axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
+                    radialCount: currentUI.symmetryRadialCount || 4
+                  } : null
+                );
+
+                const onionPaths = [stroke.points];
+                if (layerSym && layerSym.enabled) {
+                  const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
+                  const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
+                  onionPaths.push(...getSymmetricPoints(stroke.points, layerSym.type, ax, ay, layerSym.radialCount || 4));
                 }
+
+                onionPaths.forEach(pts => {
+                  if (pts.length === 0) return;
+                  
+                  const renderPath = () => {
+                    if (isSpline) {
+                      drawCatmullRomSpline(ctx, pts, 0.5);
+                    } else {
+                      ctx.beginPath();
+                      if (cornerRoundness > 0) {
+                        drawCornerRoundedPath(ctx, pts, cornerRoundness);
+                      } else {
+                        ctx.moveTo(pts[0].x, pts[0].y);
+                        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                      }
+                    }
+                  };
+
+                  // 1. Translucent Styled representation
+                  if (onionMode === 'styled' || onionMode === 'both') {
+                    ctx.save();
+                    ctx.globalAlpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1);
+                    renderPath();
+                    if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
+                      ctx.fillStyle = resolvedStyle.fillColor;
+                      ctx.fill();
+                    }
+                    if (resolvedStyle.strokeColor && resolvedStyle.strokeColor !== 'none') {
+                      ctx.lineCap = currentUI.strokeCap || 'round';
+                      ctx.lineJoin = 'round';
+                      ctx.strokeStyle = resolvedStyle.strokeColor;
+                      ctx.lineWidth = resolvedStyle.strokeWidth;
+                      ctx.stroke();
+                    }
+                    ctx.restore();
+                  }
+
+                  // 2. Wireframe Thin Blue line
+                  if (onionMode === 'wireframe' || onionMode === 'both') {
+                    ctx.save();
+                    ctx.globalAlpha = Math.min(1.0, currentUI.onionSkinOpacity * 2.5 + 0.2);
+                    renderPath();
+                    ctx.strokeStyle = '#3B82F6';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([]);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
+                });
               }
            });
-           ctx.globalAlpha = 1.0;
          });
       }
 
       currentProject.layers.forEach(layer => {
         if (!layer.visible) return;
         
+        const isLayerActive = layer.id === currentUI.selectedLayerId;
+        const isCreatingNewState = currentUI.selectedKeyframeId === null;
+        const isActivelyDrawingOnThisLayer = (interactionModeRef.current === 'drawing' || currentPolyline.length > 0) && isLayerActive;
+
+        // Inactive layer visibility modes
+        if (!isLayerActive && currentUI.mode !== 'play') {
+          if (currentUI.inactiveLayerMode === 'hidden') return;
+        }
+
         const layerRelevantKeyframes = currentProject.keyframes.filter(kf => {
             const ls = kf.layerStates.find(s => s.layerId === layer.id);
             return ls && ls.strokes.length > 0;
@@ -748,12 +854,30 @@ export const Canvas: React.FC = () => {
              .filter(k => k.weight > 0.0001);
 
         const strokeId = `stroke-${layer.id}-unique`;
-        const isLayerActive = layer.id === currentUI.selectedLayerId;
-        const isCreatingNewState = currentUI.selectedKeyframeId === null;
 
         let layerGlobalAlpha = layer.opacity;
-        if (!isLayerActive && currentUI.mode !== 'play') layerGlobalAlpha *= currentUI.inactiveLayerOpacity;
-        if (isCreatingNewState && currentUI.mode === 'edit') layerGlobalAlpha *= currentUI.ghostStrokeOpacity;
+        let isInactiveWireframe = false;
+
+        if (!isLayerActive && currentUI.mode !== 'play') {
+          if (currentUI.inactiveLayerMode === 'wireframe') {
+            isInactiveWireframe = true;
+            layerGlobalAlpha *= (currentUI.inactiveLayerOpacity ?? 0.3);
+          } else if (currentUI.inactiveLayerMode === 'normal') {
+            layerGlobalAlpha = layer.opacity;
+          } else {
+            // 'dimmed' (default)
+            layerGlobalAlpha *= (currentUI.inactiveLayerOpacity ?? 0.3);
+          }
+        }
+
+        if (isLayerActive) {
+          if (isActivelyDrawingOnThisLayer) {
+            // Dim existing stroke while redrawing new stroke over it
+            layerGlobalAlpha *= (currentUI.redrawGhostOpacity ?? 0.25);
+          } else if (isCreatingNewState && currentUI.mode === 'edit') {
+            layerGlobalAlpha *= (currentUI.ghostStrokeOpacity ?? 0.4);
+          }
+        }
 
         const strokeData = activeKeyframes.map(kf => {
             const state = kf.layerStates.find(ls => ls.layerId === layer.id);
@@ -774,7 +898,7 @@ export const Canvas: React.FC = () => {
         const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
         if (!primaryStroke) return;
 
-        const { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness } = interpolateStrokePoints(
+        let { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness } = interpolateStrokePoints(
             strokeId, 
             primaryStroke.points, 
             strokeData, 
@@ -782,41 +906,67 @@ export const Canvas: React.FC = () => {
             interpolationTargetCount 
         );
 
+        if (isInactiveWireframe) {
+          interpolatedFill = 'none';
+          interpolatedWidth = 1;
+        }
+
         if (interpolatedPoints.length > 0) {
-            
-            if (layer.interpolationMode === 'spline') {
-                drawCatmullRomSpline(ctx, interpolatedPoints, 0.5); 
-            } else {
-                ctx.beginPath();
-                if (interpolatedCornerRoundness > 0) {
-                    drawCornerRoundedPath(ctx, interpolatedPoints, interpolatedCornerRoundness);
-                } else {
-                    ctx.moveTo(interpolatedPoints[0].x, interpolatedPoints[0].y);
-                    for (let i = 1; i < interpolatedPoints.length; i++) ctx.lineTo(interpolatedPoints[i].x, interpolatedPoints[i].y);
-                }
+            const layerSym = layer.symmetry?.enabled ? layer.symmetry : (
+              (layer.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
+                enabled: true,
+                type: currentUI.symmetryType,
+                axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
+                axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
+                radialCount: currentUI.symmetryRadialCount || 4
+              } : null
+            );
+
+            const allInterpolatedPaths = [interpolatedPoints];
+            if (layerSym && layerSym.enabled) {
+              const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
+              const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
+              const symVariants = getSymmetricPoints(interpolatedPoints, layerSym.type, ax, ay, layerSym.radialCount || 4);
+              allInterpolatedPaths.push(...symVariants);
             }
-            
-            ctx.globalAlpha = layerGlobalAlpha;
-            switch(layer.blendMode) {
-                case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
-                case 'screen': ctx.globalCompositeOperation = 'screen'; break;
-                case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
-                case 'difference': ctx.globalCompositeOperation = 'difference'; break;
-                case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
-                default: ctx.globalCompositeOperation = 'source-over';
-            }
-            
-            if (interpolatedFill && interpolatedFill !== 'none') {
-                ctx.fillStyle = interpolatedFill;
-                ctx.fill();
-            }
-            if (interpolatedColor && interpolatedColor !== 'none') {
-                ctx.lineCap = currentUI.strokeCap || 'round';
-                ctx.lineJoin = 'round';
-                ctx.strokeStyle = interpolatedColor;
-                ctx.lineWidth = interpolatedWidth;
-                ctx.stroke();
-            }
+
+            allInterpolatedPaths.forEach(pathPts => {
+              if (pathPts.length === 0) return;
+
+              if (layer.interpolationMode === 'spline') {
+                  drawCatmullRomSpline(ctx, pathPts, 0.5); 
+              } else {
+                  ctx.beginPath();
+                  if (interpolatedCornerRoundness > 0) {
+                      drawCornerRoundedPath(ctx, pathPts, interpolatedCornerRoundness);
+                  } else {
+                      ctx.moveTo(pathPts[0].x, pathPts[0].y);
+                      for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
+                  }
+              }
+              
+              ctx.globalAlpha = layerGlobalAlpha;
+              switch(layer.blendMode) {
+                  case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+                  case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+                  case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+                  case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+                  case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+                  default: ctx.globalCompositeOperation = 'source-over';
+              }
+              
+              if (interpolatedFill && interpolatedFill !== 'none') {
+                  ctx.fillStyle = interpolatedFill;
+                  ctx.fill();
+              }
+              if (interpolatedColor && interpolatedColor !== 'none') {
+                  ctx.lineCap = currentUI.strokeCap || 'round';
+                  ctx.lineJoin = 'round';
+                  ctx.strokeStyle = interpolatedColor;
+                  ctx.lineWidth = interpolatedWidth;
+                  ctx.stroke();
+              }
+            });
             
             ctx.globalAlpha = 1.0;
             ctx.globalCompositeOperation = 'source-over';
@@ -826,23 +976,39 @@ export const Canvas: React.FC = () => {
       if (interactionModeRef.current === 'drawing' && currentPointsRef.current.length > 0) {
         ctx.globalAlpha = 1.0; 
 
-        ctx.beginPath();
         const pts = currentPointsRef.current;
         const currentLayer = currentProject.layers.find(l => l.id === currentUI.selectedLayerId);
         const cornerRoundness = currentLayer?.baseStyle?.cornerRoundness || 0;
-        
-        if (cornerRoundness > 0) {
-             drawCornerRoundedPath(ctx, pts, cornerRoundness);
-        } else {
-             ctx.moveTo(pts[0].x, pts[0].y);
-             for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+
+        const allPathsToRender = [pts];
+        if (currentUI.symmetryEnabled) {
+          const symVariants = getSymmetricPoints(
+            pts,
+            currentUI.symmetryType,
+            currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
+            currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
+            currentUI.symmetryRadialCount
+          );
+          allPathsToRender.push(...symVariants);
         }
 
         ctx.strokeStyle = currentUI.brushColor !== 'none' ? currentUI.brushColor : 'rgba(0,0,0,0.5)';
         ctx.lineWidth = currentUI.brushSize;
         ctx.lineCap = currentUI.strokeCap || 'round';
         ctx.lineJoin = 'round';
-        ctx.stroke();
+
+        allPathsToRender.forEach(pathPts => {
+          if (pathPts.length === 0) return;
+          ctx.beginPath();
+          if (cornerRoundness > 0) {
+            drawCornerRoundedPath(ctx, pathPts, cornerRoundness);
+          } else {
+            ctx.moveTo(pathPts[0].x, pathPts[0].y);
+            for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
+          }
+          ctx.stroke();
+        });
+
         ctx.globalAlpha = 1.0; 
       }
 
@@ -853,37 +1019,67 @@ export const Canvas: React.FC = () => {
          
          const currentLayer = currentProject.layers.find(l => l.id === currentUI.selectedLayerId);
          const isSpline = currentLayer?.interpolationMode === 'spline';
+         const cornerRoundness = currentLayer?.baseStyle?.cornerRoundness || 0;
 
-         if (isSpline) {
-             drawCatmullRomSpline(ctx, polyPreview, 0.5);
-         } else {
-             ctx.beginPath();
-             const cornerRoundness = currentLayer?.baseStyle?.cornerRoundness || 0;
-             if (cornerRoundness > 0) {
-                 drawCornerRoundedPath(ctx, polyPreview, cornerRoundness);
-             } else {
-                 ctx.moveTo(polyPreview[0].x, polyPreview[0].y);
-                 for (let i = 1; i < polyPreview.length; i++) ctx.lineTo(polyPreview[i].x, polyPreview[i].y);
-             }
+         const allPolyPreviews = [polyPreview];
+         const allPolyAnchors = [currentPolyline];
+         if (currentUI.symmetryEnabled) {
+           const ax = currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2);
+           const ay = currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2);
+
+           const symPreviews = getSymmetricPoints(
+             polyPreview,
+             currentUI.symmetryType,
+             ax,
+             ay,
+             currentUI.symmetryRadialCount
+           );
+           allPolyPreviews.push(...symPreviews);
+
+           const symAnchors = getSymmetricPoints(
+             currentPolyline,
+             currentUI.symmetryType,
+             ax,
+             ay,
+             currentUI.symmetryRadialCount
+           );
+           allPolyAnchors.push(...symAnchors);
          }
 
-         if (currentUI.fillColor !== 'none') {
-             ctx.fillStyle = currentUI.fillColor;
-             ctx.globalAlpha = isGhostState ? currentUI.ghostStrokeOpacity * 0.8 : 0.5;
-             ctx.fill();
-         }
+         allPolyPreviews.forEach(previewPts => {
+           if (previewPts.length === 0) return;
+           if (isSpline) {
+               drawCatmullRomSpline(ctx, previewPts, 0.5);
+           } else {
+               ctx.beginPath();
+               if (cornerRoundness > 0) {
+                   drawCornerRoundedPath(ctx, previewPts, cornerRoundness);
+               } else {
+                   ctx.moveTo(previewPts[0].x, previewPts[0].y);
+                   for (let i = 1; i < previewPts.length; i++) ctx.lineTo(previewPts[i].x, previewPts[i].y);
+               }
+           }
 
-         ctx.globalAlpha = 1.0;
-         ctx.strokeStyle = currentUI.brushColor !== 'none' ? currentUI.brushColor : 'rgba(0,0,0,0.5)';
-         ctx.lineWidth = currentUI.brushSize;
-         ctx.stroke();
+           if (currentUI.fillColor !== 'none') {
+               ctx.fillStyle = currentUI.fillColor;
+               ctx.globalAlpha = isGhostState ? currentUI.ghostStrokeOpacity * 0.8 : 0.5;
+               ctx.fill();
+           }
+
+           ctx.globalAlpha = 1.0;
+           ctx.strokeStyle = currentUI.brushColor !== 'none' ? currentUI.brushColor : 'rgba(0,0,0,0.5)';
+           ctx.lineWidth = currentUI.brushSize;
+           ctx.stroke();
+         });
          
          ctx.fillStyle = currentUI.brushColor !== 'none' ? currentUI.brushColor : 'rgba(0,0,0,0.5)';
-         currentPolyline.forEach((p, index) => {
-            ctx.beginPath();
-            const r = (index === 0) ? 5 : 3; 
-            ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-            ctx.fill();
+         allPolyAnchors.forEach(anchors => {
+           anchors.forEach((p, index) => {
+              ctx.beginPath();
+              const r = (index === 0) ? 5 : 3; 
+              ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+              ctx.fill();
+           });
          });
          ctx.globalAlpha = 1.0; 
       }
@@ -1005,7 +1201,7 @@ export const Canvas: React.FC = () => {
           />
           
           {/* Point Count Display */}
-          {ui.selectedStrokeId && ui.mode === 'edit' && (
+          {ui.selectedStrokeId && ui.mode === 'edit' && ui.transformMode === 'points' && (
               <div className="absolute bottom-4 right-4 bg-black/40 backdrop-blur-sm text-white text-[10px] font-mono px-2 py-1 rounded-md pointer-events-none opacity-60">
                   {(() => {
                       const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);

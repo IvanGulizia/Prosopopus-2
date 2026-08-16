@@ -13,6 +13,7 @@ const Icons = {
   PolyIcon: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 7 3 10 8-12"/><circle cx="7" cy="7" r="2"/><circle cx="10" cy="17" r="2"/><circle cx="18" cy="5" r="2"/></svg>,
   Settings: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>,
   Undo: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>,
+  Symmetry: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="21" strokeDasharray="3 3"/><path d="M12 5H7a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h5"/><path d="M12 5h5a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5"/></svg>,
   Redo: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/></svg>,
   Play: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>,
   Pause: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
@@ -22,8 +23,8 @@ const Icons = {
 const STROKE_SIZES = [2, 4, 8, 12, 16];
 
 export const Toolbar: React.FC = () => {
-  const { ui, setTool, undo, redo, history, toggleSettings, setMode, setBrushColor, setFillColor, setBrushSize, closeAllPanels, toggleTransformMode } = useStore();
-  const [activeColorPicker, setActiveColorPicker] = useState<'stroke' | 'fill' | 'size' | null>(null);
+  const { ui, setTool, undo, redo, history, toggleSettings, setMode, setBrushColor, setFillColor, setBrushSize, setStrokeResolution, closeAllPanels, toggleTransformMode, toggleSymmetry } = useStore();
+  const [activeColorPicker, setActiveColorPicker] = useState<'stroke' | 'fill' | 'size' | 'resolution' | null>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   
   const isPlayMode = ui.mode === 'play';
@@ -89,15 +90,35 @@ export const Toolbar: React.FC = () => {
             icon={ui.transformMode === 'object' ? Icons.Select : Icons.Points} 
             label={ui.transformMode === 'object' ? "Transform" : "Edit Points"} 
             onClick={() => {
-                if (ui.selectedTool === 'select') {
-                    toggleTransformMode();
-                } else {
+                if (ui.selectedTool !== 'select') {
                     setTool('select');
+                } else {
+                    toggleTransformMode();
                 }
             }}
           />
           <ToolButton tool="pen" icon={Icons.Pen} label="Pen" />
           <ToolButton tool="polyline" icon={Icons.PolyIcon} label="Polyline" />
+
+          <button
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              toggleSymmetry(); 
+            }}
+            disabled={isPlayMode}
+            className={`p-2.5 rounded-full transition-all duration-200 flex items-center justify-center group relative
+              ${ui.symmetryEnabled && !isPlayMode
+                ? 'bg-blue-500 text-white shadow-lg scale-105' 
+                : 'hover:bg-gray-100 text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed'}`}
+            title="Toggle Symmetry"
+          >
+            <Icons.Symmetry />
+            {!isPlayMode && (
+              <span className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 pointer-events-none">
+                {ui.symmetryEnabled ? `Symmetry: ${ui.symmetryType}` : 'Enable Symmetry'}
+              </span>
+            )}
+          </button>
           
           <div className="w-px h-6 bg-gray-200 mx-1" />
           

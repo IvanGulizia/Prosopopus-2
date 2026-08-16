@@ -22,6 +22,7 @@ export interface StyleProps {
   lineStyle: LineStyle;
   cornerRoundness?: number; // 0 to 100
   strokeCap?: 'round' | 'butt' | 'square';
+  strokeResolution?: number; // Target point count for interpolation (default 200)
 }
 
 export interface Stroke {
@@ -33,7 +34,15 @@ export interface Stroke {
 
 // --- Layers ---
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference' | 'exclusion';
-export type InterpolationMode = 'resample' | 'points' | 'spline'; // Added 'spline'
+export type InterpolationMode = 'resample' | 'points' | 'spline' | 'length';
+
+export interface LayerSymmetryConfig {
+  enabled: boolean;
+  type: SymmetryType; // 'vertical' | 'horizontal' | 'quad' | 'radial'
+  axisX?: number; // Axis X offset in px (default canvas width / 2)
+  axisY?: number; // Axis Y offset in px (default canvas height / 2)
+  radialCount?: number; // 2..12 for radial
+}
 
 export interface Layer {
   id: string;
@@ -44,6 +53,7 @@ export interface Layer {
   opacity: number;
   interpolationMode: InterpolationMode; // Per-layer setting
   baseStyle?: StyleProps; // The default style for strokes in this layer
+  symmetry?: LayerSymmetryConfig;
 }
 
 // --- Axes & Keyframes (The Interpolation Engine) ---
@@ -91,6 +101,10 @@ export type ToolType = 'cursor' | 'select' | 'pen' | 'polyline';
 export type UIMode = 'edit' | 'play';
 // 'bilinear-grid' separates axes logic for stable matrix interpolation
 export type InterpolationStrategy = 'idw' | 'bilinear-grid'; 
+export type SymmetryType = 'vertical' | 'horizontal' | 'quad' | 'radial';
+export type SymmetryTarget = 'merge' | 'layer';
+export type OnionSkinMode = 'wireframe' | 'styled' | 'both';
+export type InactiveLayerMode = 'dimmed' | 'wireframe' | 'normal' | 'hidden';
 
 export interface Theme {
   bgApp: string;
@@ -153,10 +167,13 @@ export interface UIState {
   smoothingEnabled: boolean; // Renamed from simplifyStrokes
   onionSkinEnabled: boolean;
   onionSkinOpacity: number;
+  onionSkinMode: OnionSkinMode; // 'wireframe' | 'styled' | 'both'
   inactiveLayerOpacity: number; // 0 to 1, opacity of non-selected layers
+  inactiveLayerMode: InactiveLayerMode; // 'dimmed' | 'wireframe' | 'normal' | 'hidden'
   
   // Visual Feedback
   ghostStrokeOpacity: number; // Opacity when drawing in a new/undefined state
+  redrawGhostOpacity: number; // Opacity of existing stroke while redrawing over it
 
   // Viewport & Tools
   zoom: number;
@@ -165,6 +182,16 @@ export interface UIState {
   brushColor: string | 'none'; // Can be none now
   fillColor: string | 'none'; 
   cornerRoundness: number; // 0 to 100
+  strokeResolution: number; // Target point count for interpolation
+
+  // Symmetry
+  symmetryEnabled: boolean;
+  symmetryType: SymmetryType; // 'vertical' | 'horizontal' | 'quad' | 'radial'
+  symmetryAxisX: number; // X coordinate for vertical / center (pixels)
+  symmetryAxisY: number; // Y coordinate for horizontal / center (pixels)
+  symmetryRadialCount: number; // For radial mode: 2, 3, 4, 6, 8 (default 4)
+  symmetryTarget: SymmetryTarget; // 'merge' | 'layer'
+  showSymmetryAxis: boolean; // Show guide line(s) on canvas
 
   // PERFORMANCE
   resolutionScale: number; // 0.5 to 3.0 (Pixel Density override)

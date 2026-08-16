@@ -139,20 +139,25 @@ Ces fonctionnalités constituent le cœur de l'expérience utilisateur et ne doi
 ### Outils (Tools)
 *   **Pen**: Dessin libre, aucune fermeture automatique.
 *   **Polyline**: Dessin point par point. Clic sur Départ = Snap Géométrique ($P_n = P_0$).
-*   **Select/Transform**:
-    *   **Mode Objet (1 Clic)** : Déplacement global. Gizmo de rotation/échelle.
-    *   **Mode Vertex (2 Clics)** : Édition point par point.
+*   **Select/Transform (3 États)**:
+    *   **Inactif** : L'outil n'est pas sélectionné.
+    *   **Mode Objet (Transform)** : Déplacement global. Gizmo de rotation/échelle.
+    *   **Mode Vertex (Points)** : Édition point par point.
+    *   *Note*: Le bouton de la barre d'outils cycle entre ces 3 états. Le changement de calque désactive automatiquement le mode Transform pour revenir au dessin libre.
     *   **Delta Snapping** : Lors du déplacement avec la Grille active, c'est le mouvement (Delta) qui est aligné sur la grille, pas le centre de l'objet, préservant l'alignement relatif des points.
 
 ### Gestion des Calques
-*   **Interpolation Mode**: Choix par calque entre `Resample`, `Points` et `Spline`.
+*   **Interpolation Mode**: Choix par calque entre `Resample`, `Length`, `Points` et `Spline`.
+    *   **Resample Mode**: Échantillonnage fixe à 200 points.
+    *   **Length Mode**: Échantillonnage dynamique basé sur la longueur du tracé (préserve le nombre de points max).
     *   **Spline Mode**: Utilise des courbes de Catmull-Rom passant par les ancres, sans fermeture automatique.
 *   **WYSIWYG Grid** : Lorsque la grille est active, le lissage (Chaikin) est désactivé à la création pour garantir une fidélité géométrique parfaite.
+*   **Global Property Updates** : Les modifications de couleur et de taille via l'UI s'appliquent au calque et à l'état courant même si aucun tracé n'est explicitement sélectionné.
 
 ### Matrice & Navigation
-*   **AxisMap**: Visualisation 2D de l'espace des états.
+*   **AxisMap**: Visualisation 2D de l'espace des états. Les points indiquent visuellement s'ils contiennent des données pour le calque actif (noir) ou pour d'autres calques (gris).
 *   **Snap Matrix**: Grille magnétique paramétrable pour l'axe X/Y.
-*   **Strict Selection**: Un Keyframe n'est éditable que si l'on est *exactement* dessus.
+*   **Strict Selection**: Un Keyframe n'est éditable que si l'on est *exactement* dessus. La sélection d'un Keyframe auto-sélectionne le tracé correspondant si le mode Transform est actif.
 *   **Drag & Drop Keyframes** : Déplacement direct des états clés sur la carte pour réorganiser l'espace d'interpolation.
 
 ---

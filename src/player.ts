@@ -3,7 +3,7 @@
  * Lightweight rendering engine for Prosopopus vector interpolation projects.
  */
 
-import { Project, Point, Stroke, Layer, Keyframe, InterpolationStrategy, StyleProps } from '../types';
+import { Project, Point, Stroke, Layer, Keyframe, InterpolationStrategy, StyleProps, InterpolationMode } from '../types';
 
 // --- CORE MATH UTILS (Inlined for autonomy) ---
 
@@ -220,7 +220,7 @@ const resolveStrokeStyle = (stroke: Stroke | undefined, layer: Layer | undefined
 
 const interpolateStrokePoints = (
   activeKeyframes: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number, cornerRoundness: number }[],
-  mode: 'resample' | 'points' | 'spline' = 'resample',
+  mode: InterpolationMode = 'resample',
   targetCount: number = 200
 ): { points: Point[], color: string, fillColor: string, width: number, cornerRoundness: number } => {
   if (activeKeyframes.length === 0) return { points: [], color: 'rgba(0,0,0,0)', fillColor: 'none', width: 1, cornerRoundness: 0 };
@@ -386,7 +386,11 @@ export class ProsopopusPlayer {
       const primary = strokeData.sort((a, b) => b.weight - a.weight).find(sd => sd.style)?.style;
       if (!primary) return;
 
-      const { points, color, fillColor, width, cornerRoundness } = interpolateStrokePoints(strokeData, layer.interpolationMode, settings.performanceMode ? 80 : 200);
+      const { points, color, fillColor, width, cornerRoundness } = interpolateStrokePoints(
+        strokeData,
+        layer.interpolationMode,
+        settings.performanceMode ? 80 : 200
+      );
       if (points.length > 0) {
         if (layer.interpolationMode === 'spline') drawCatmullRomSpline(ctx, points, 0.5);
         else if (cornerRoundness > 0) drawCornerRoundedPath(ctx, points, cornerRoundness);

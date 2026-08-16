@@ -1,5 +1,5 @@
 // utils/math.ts
-import { Point, Stroke, InterpolationStrategy } from '../types';
+import { Point, Stroke, InterpolationStrategy, SymmetryType } from '../types';
 
 export const distance = (p1: Point, p2: Point): number => {
   return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
@@ -376,7 +376,7 @@ export const interpolateStrokePoints = (
   strokeId: string,
   basePoints: Point[], 
   keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number, cornerRoundness: number }[],
-  mode: 'resample' | 'points' | 'spline' = 'resample',
+  mode: 'resample' | 'points' | 'spline' | 'length' = 'resample',
   targetCount: number = 200 
 ): { points: Point[], color: string, fillColor: string, width: number, cornerRoundness: number } => {
   
@@ -403,7 +403,7 @@ export const interpolateStrokePoints = (
   let ACTUAL_TARGET_COUNT = targetCount; 
   const maxPts = Math.max(...activeKeyframes.map(k => k.points!.length));
 
-  if (mode === 'points' || mode === 'spline') {
+  if (mode === 'points' || mode === 'spline' || mode === 'length') {
       ACTUAL_TARGET_COUNT = maxPts;
   }
 
@@ -656,4 +656,141 @@ export const drawCatmullRomSpline = (ctx: CanvasRenderingContext2D, points: Poin
 
         ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
     }
+};
+
+// --- SYMMETRY HELPERS ---
+
+/**
+ * Calculates transformed/mirrored point arrays for symmetry rendering and creation.
+ */
+export const getSymmetricPoints = (
+  points: Point[],
+  type: SymmetryType,
+  axisX: number,
+  axisY: number,
+  radialCount: number = 4
+): Point[][] => {
+  if (points.length === 0) return [];
+
+  const results: Point[][] = [];
+
+  if (type === 'vertical') {
+    results.push(
+      points.map(p => ({
+        x: 2 * axisX - p.x,
+        y: p.y,
+        pressure: p.pressure
+      }))
+    );
+  } else if (type === 'horizontal') {
+    results.push(
+      points.map(p => ({
+        x: p.x,
+        y: 2 * axisY - p.y,
+        pressure: p.pressure
+      }))
+    );
+  } else if (type === 'quad') {
+    // 1. Mirror Horizontal (across vertical axisX)
+    results.push(
+      points.map(p => ({
+        x: 2 * axisX - p.x,
+        y: p.y,
+        pressure: p.pressure
+      }))
+    );
+    // 2. Mirror Vertical (across horizontal axisY)
+    results.push(
+      points.map(p => ({
+        x: p.x,
+        y: 2 * axisY - p.y,
+        pressure: p.pressure
+      }))
+    );
+    // 3. Mirror Both (opposite quadrant)
+    results.push(
+      points.map(p => ({
+        x: 2 * axisX - p.x,
+        y: 2 * axisY - p.y,
+        pressure: p.pressure
+      }))
+    );
+  } else if (type === 'radial') {
+    const count = Math.max(2, Math.min(12, radialCount));
+    const center = { x: axisX, y: axisY };
+    for (let k = 1; k < count; k++) {
+      const angle = (k * 2 * Math.PI) / count;
+      results.push(points.map(p => rotatePoint(p, center, angle)));
+    }
+  }
+
+  return results;
+};
+
+/**
+ * Merges original and mirrored points into one continuous contour path.
+ * For vertical symmetry, it connects the drawn half with the mirrored half seamlessly.
+ */
+export const getUnifiedSymmetricContour = (
+  points: Point[],
+  type: SymmetryType,
+  axisX: number,
+  axisY: number
+): Point[] => {
+  if (points.length < 2) return points;
+
+  const SNAP_THRESHOLD = 16; // Snap to axis if close enough
+
+  if (type === 'vertical') {
+    // Clone points with optional axis snap on start and end
+    const raw = points.map((p, idx) => {
+      if ((idx === 0 || idx === points.length - 1) && Math.abs(p.x - axisX) < SNAP_THRESHOLD) {
+        return { ...p, x: axisX };
+      }
+      return p;
+    });
+
+    // Mirrored points in reverse order to smoothly connect at the opposite end
+    const mirroredRev = [...raw]
+      .reverse()
+      .map(p => ({
+        x: 2 * axisX - p.x,
+        y: p.y,
+        pressure: p.pressure
+      }));
+
+    // Avoid duplicate point at meeting seam
+    const lastRaw = raw[raw.length - 1];
+    const firstMirrored = mirroredRev[0];
+    if (distance(lastRaw, firstMirrored) < 1.0) {
+      mirroredRev.shift();
+    }
+
+    return [...raw, ...mirroredRev];
+  } else if (type === 'horizontal') {
+    const raw = points.map((p, idx) => {
+      if ((idx === 0 || idx === points.length - 1) && Math.abs(p.y - axisY) < SNAP_THRESHOLD) {
+        return { ...p, y: axisY };
+      }
+      return p;
+    });
+
+    const mirroredRev = [...raw]
+      .reverse()
+      .map(p => ({
+        x: p.x,
+        y: 2 * axisY - p.y,
+        pressure: p.pressure
+      }));
+
+    const lastRaw = raw[raw.length - 1];
+    const firstMirrored = mirroredRev[0];
+    if (distance(lastRaw, firstMirrored) < 1.0) {
+      mirroredRev.shift();
+    }
+
+    return [...raw, ...mirroredRev];
+  }
+
+  return points;
 };

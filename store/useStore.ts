@@ -1,8 +1,8 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME } from '../constants';
-import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints } from '../utils/math';
+import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour } from '../utils/math';
 
 interface StoreState {
   project: Project;
@@ -30,6 +30,7 @@ interface StoreState {
 
   setMode: (mode: UIMode) => void;
   toggleTransformMode: () => void;
+  setTransformMode: (mode: 'object' | 'points') => void;
 
   setTool: (tool: ToolType) => void;
   setBrushColor: (color: string) => void;
@@ -63,12 +64,28 @@ interface StoreState {
   
   toggleOnionSkin: () => void;
   setOnionSkinOpacity: (opacity: number) => void;
+  setOnionSkinMode: (mode: OnionSkinMode) => void;
   setInactiveLayerOpacity: (opacity: number) => void;
+  setInactiveLayerMode: (mode: InactiveLayerMode) => void;
   setGhostStrokeOpacity: (opacity: number) => void;
+  setRedrawGhostOpacity: (opacity: number) => void;
 
   // Performance Actions
   setResolutionScale: (scale: number) => void;
   togglePerformanceMode: () => void;
+  setStrokeResolution: (resolution: number) => void;
+  
+  // Symmetry Actions
+  toggleSymmetry: () => void;
+  setSymmetryType: (type: SymmetryType) => void;
+  setSymmetryAxisX: (x: number) => void;
+  setSymmetryAxisY: (y: number) => void;
+  setSymmetryRadialCount: (count: number) => void;
+  setSymmetryTarget: (target: SymmetryTarget) => void;
+  toggleShowSymmetryAxis: () => void;
+  resetSymmetryToCenter: () => void;
+  toggleLayerSymmetry: (layerId: string) => void;
+  setLayerSymmetryConfig: (layerId: string, config: Partial<LayerSymmetryConfig>) => void;
   
   // Layer Actions
   addLayer: () => void;
@@ -130,7 +147,8 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
             brushColor: style.strokeColor,
             fillColor: style.fillColor,
             brushSize: style.strokeWidth,
-            cornerRoundness: style.cornerRoundness
+            cornerRoundness: style.cornerRoundness,
+            strokeResolution: style.strokeResolution || 200
         };
     }
 
@@ -147,7 +165,8 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
         brushColor: style.strokeColor,
         fillColor: style.fillColor,
         brushSize: style.strokeWidth,
-        cornerRoundness: style.cornerRoundness
+        cornerRoundness: style.cornerRoundness,
+        strokeResolution: style.strokeResolution || 200
     };
 };
 
@@ -269,57 +288,118 @@ export const useStore = create<StoreState>((set, get) => ({
     };
   }),
 
-  toggleTransformMode: () => set((state) => ({
-    ui: {
-      ...state.ui,
-      transformMode: state.ui.transformMode === 'object' ? 'points' : 'object'
-    }
-  })),
+  toggleTransformMode: () => set((state) => {
+      let newSelectedStrokeId = state.ui.selectedStrokeId;
+      
+      // Auto-select stroke if we don't have one and we are switching to select mode
+      if (state.ui.selectedLayerId && state.ui.selectedKeyframeId && !newSelectedStrokeId) {
+          const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
+          if (kf) {
+              const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+              if (ls && ls.strokes.length > 0) {
+                  newSelectedStrokeId = ls.strokes[0].id;
+              }
+          }
+      }
 
-  setTool: (tool) => set((state) => ({ 
-      ui: { 
-          ...state.ui, 
-          selectedTool: tool, 
-          // We DO NOT clear selectedStrokeId here anymore. 
-          // This allows "Direct Selection" workflow (Draw -> Click Select -> Object is already selected)
-      } 
-  })),
+      return {
+        ui: {
+          ...state.ui,
+          selectedTool: 'select', // Force select tool when toggling transform mode
+          selectedStrokeId: newSelectedStrokeId,
+          transformMode: state.ui.transformMode === 'object' ? 'points' : 'object'
+        }
+      };
+  }),
+
+  setTransformMode: (mode) => set((state) => {
+      let newSelectedStrokeId = state.ui.selectedStrokeId;
+      
+      // Auto-select stroke if we don't have one and we are switching to select mode
+      if (state.ui.selectedLayerId && state.ui.selectedKeyframeId && !newSelectedStrokeId) {
+          const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
+          if (kf) {
+              const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+              if (ls && ls.strokes.length > 0) {
+                  newSelectedStrokeId = ls.strokes[0].id;
+              }
+          }
+      }
+
+      return {
+        ui: {
+          ...state.ui,
+          selectedTool: 'select', // Force select tool when setting transform mode
+          selectedStrokeId: newSelectedStrokeId,
+          transformMode: mode
+        }
+      };
+  }),
+
+  setTool: (tool) => set((state) => {
+      let newSelectedStrokeId = state.ui.selectedStrokeId;
+      
+      // Auto-select stroke if switching to a transform tool
+      if (tool === 'select' && state.ui.selectedLayerId && state.ui.selectedKeyframeId && !newSelectedStrokeId) {
+          const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
+          if (kf) {
+              const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+              if (ls && ls.strokes.length > 0) {
+                  newSelectedStrokeId = ls.strokes[0].id;
+              }
+          }
+      }
+
+      return { 
+          ui: { 
+              ...state.ui, 
+              selectedTool: tool, 
+              selectedStrokeId: newSelectedStrokeId,
+              // Keep transformMode as is if switching to select, so it remembers point vs object
+              transformMode: tool === 'select' ? state.ui.transformMode : state.ui.transformMode,
+          } 
+      };
+  }),
   
   // --- BATCH UPDATE: PROPERTIES (Color/Size) ---
   // If a stroke is selected, these functions update the stroke across ALL keyframes.
   
   setBrushColor: (color) => set((state) => {
-    // 1. Update UI (Source of Truth for next stroke)
     const newUI = { ...state.ui, brushColor: color };
     const strokeColor = color === 'none' ? 'none' : color;
 
-    // 2. Deep Update if Object Selected
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
-        const targetId = state.ui.selectedStrokeId;
-        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
+        const targetStrokeId = state.ui.selectedStrokeId;
+        const targetLayerId = state.ui.selectedLayerId;
+        
+        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
 
-        const newKeyframes = state.project.keyframes.map(kf => {
-            if (kf.id !== state.ui.selectedKeyframeId) return kf;
-            return {
-                ...kf,
-                layerStates: kf.layerStates.map(ls => ({
-                    ...ls,
-                    strokes: ls.strokes.map(s => {
-                        // Update only matching ID
-                        if (s.id === targetId) {
-                            return { ...s, style: { ...s.style, strokeColor } };
-                        }
-                        return s;
+        if (shouldUpdateStrokes) {
+            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+            const newKeyframes = state.project.keyframes.map(kf => {
+                if (kf.id !== state.ui.selectedKeyframeId) return kf;
+                return {
+                    ...kf,
+                    layerStates: kf.layerStates.map(ls => {
+                        if (ls.layerId !== targetLayerId) return ls;
+                        return {
+                            ...ls,
+                            strokes: ls.strokes.map(s => {
+                                if (targetStrokeId && s.id !== targetStrokeId) return s;
+                                return { ...s, style: { ...s.style, strokeColor } };
+                            })
+                        };
                     })
-                }))
-            };
-        });
+                };
+            });
 
-        return { 
-           ui: newUI, 
-           project: { ...state.project, keyframes: newKeyframes },
-           history: { past, future: [] }
-        };
+            return { 
+               ui: newUI, 
+               project: { ...state.project, keyframes: newKeyframes },
+               history: { past, future: [] }
+            };
+        }
     }
 
     return { ui: newUI };
@@ -328,31 +408,38 @@ export const useStore = create<StoreState>((set, get) => ({
   setFillColor: (color) => set((state) => {
     const newUI = { ...state.ui, fillColor: color };
     
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
-        const targetId = state.ui.selectedStrokeId;
-        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
+        const targetStrokeId = state.ui.selectedStrokeId;
+        const targetLayerId = state.ui.selectedLayerId;
+        
+        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
 
-        const newKeyframes = state.project.keyframes.map(kf => {
-            if (kf.id !== state.ui.selectedKeyframeId) return kf;
-            return {
-                ...kf,
-                layerStates: kf.layerStates.map(ls => ({
-                    ...ls,
-                    strokes: ls.strokes.map(s => {
-                        if (s.id === targetId) {
-                            return { ...s, style: { ...s.style, fillColor: color } };
-                        }
-                        return s;
+        if (shouldUpdateStrokes) {
+            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+            const newKeyframes = state.project.keyframes.map(kf => {
+                if (kf.id !== state.ui.selectedKeyframeId) return kf;
+                return {
+                    ...kf,
+                    layerStates: kf.layerStates.map(ls => {
+                        if (ls.layerId !== targetLayerId) return ls;
+                        return {
+                            ...ls,
+                            strokes: ls.strokes.map(s => {
+                                if (targetStrokeId && s.id !== targetStrokeId) return s;
+                                return { ...s, style: { ...s.style, fillColor: color } };
+                            })
+                        };
                     })
-                }))
-            };
-        });
+                };
+            });
 
-        return { 
-           ui: newUI, 
-           project: { ...state.project, keyframes: newKeyframes },
-           history: { past, future: [] }
-        };
+            return { 
+               ui: newUI, 
+               project: { ...state.project, keyframes: newKeyframes },
+               history: { past, future: [] }
+            };
+        }
     }
 
     return { ui: newUI };
@@ -361,31 +448,38 @@ export const useStore = create<StoreState>((set, get) => ({
   setBrushSize: (size) => set((state) => {
     const newUI = { ...state.ui, brushSize: size };
     
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
-        const targetId = state.ui.selectedStrokeId;
-        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
+        const targetStrokeId = state.ui.selectedStrokeId;
+        const targetLayerId = state.ui.selectedLayerId;
+        
+        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
 
-        const newKeyframes = state.project.keyframes.map(kf => {
-            if (kf.id !== state.ui.selectedKeyframeId) return kf;
-            return {
-                ...kf,
-                layerStates: kf.layerStates.map(ls => ({
-                    ...ls,
-                    strokes: ls.strokes.map(s => {
-                        if (s.id === targetId) {
-                            return { ...s, style: { ...s.style, strokeWidth: size } };
-                        }
-                        return s;
+        if (shouldUpdateStrokes) {
+            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+            const newKeyframes = state.project.keyframes.map(kf => {
+                if (kf.id !== state.ui.selectedKeyframeId) return kf;
+                return {
+                    ...kf,
+                    layerStates: kf.layerStates.map(ls => {
+                        if (ls.layerId !== targetLayerId) return ls;
+                        return {
+                            ...ls,
+                            strokes: ls.strokes.map(s => {
+                                if (targetStrokeId && s.id !== targetStrokeId) return s;
+                                return { ...s, style: { ...s.style, strokeWidth: size } };
+                            })
+                        };
                     })
-                }))
-            };
-        });
+                };
+            });
 
-        return { 
-           ui: newUI, 
-           project: { ...state.project, keyframes: newKeyframes },
-           history: { past, future: [] }
-        };
+            return { 
+               ui: newUI, 
+               project: { ...state.project, keyframes: newKeyframes },
+               history: { past, future: [] }
+            };
+        }
     }
 
     return { ui: newUI };
@@ -533,11 +627,216 @@ export const useStore = create<StoreState>((set, get) => ({
   
   toggleOnionSkin: () => set((state) => ({ ui: { ...state.ui, onionSkinEnabled: !state.ui.onionSkinEnabled } })),
   setOnionSkinOpacity: (opacity) => set((state) => ({ ui: { ...state.ui, onionSkinOpacity: opacity } })),
+  setOnionSkinMode: (mode) => set((state) => ({ ui: { ...state.ui, onionSkinMode: mode } })),
   setInactiveLayerOpacity: (opacity) => set((state) => ({ ui: { ...state.ui, inactiveLayerOpacity: opacity } })),
+  setInactiveLayerMode: (mode) => set((state) => ({ ui: { ...state.ui, inactiveLayerMode: mode } })),
   setGhostStrokeOpacity: (opacity) => set((state) => ({ ui: { ...state.ui, ghostStrokeOpacity: opacity } })),
+  setRedrawGhostOpacity: (opacity) => set((state) => ({ ui: { ...state.ui, redrawGhostOpacity: opacity } })),
 
   setResolutionScale: (scale) => set((state) => ({ ui: { ...state.ui, resolutionScale: scale } })),
   togglePerformanceMode: () => set((state) => ({ ui: { ...state.ui, performanceMode: !state.ui.performanceMode } })),
+  
+  // Symmetry Actions
+  toggleSymmetry: () => set((state) => {
+    const nextEnabled = !state.ui.symmetryEnabled;
+    const selectedLayerId = state.ui.selectedLayerId;
+    let updatedLayers = state.project.layers;
+    if (selectedLayerId) {
+      updatedLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            symmetry: {
+              enabled: nextEnabled,
+              type: l.symmetry?.type || state.ui.symmetryType,
+              axisX: l.symmetry?.axisX ?? state.ui.symmetryAxisX ?? (state.project.canvasSize.width / 2),
+              axisY: l.symmetry?.axisY ?? state.ui.symmetryAxisY ?? (state.project.canvasSize.height / 2),
+              radialCount: l.symmetry?.radialCount ?? state.ui.symmetryRadialCount ?? 4
+            }
+          };
+        }
+        return l;
+      });
+    }
+    return {
+      ui: { ...state.ui, symmetryEnabled: nextEnabled },
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
+
+  setSymmetryType: (type) => set((state) => {
+    const selectedLayerId = state.ui.selectedLayerId;
+    let updatedLayers = state.project.layers;
+    if (selectedLayerId) {
+      updatedLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            symmetry: {
+              ...(l.symmetry || { enabled: state.ui.symmetryEnabled }),
+              type,
+              axisX: l.symmetry?.axisX ?? state.ui.symmetryAxisX ?? (state.project.canvasSize.width / 2),
+              axisY: l.symmetry?.axisY ?? state.ui.symmetryAxisY ?? (state.project.canvasSize.height / 2),
+              radialCount: l.symmetry?.radialCount ?? state.ui.symmetryRadialCount ?? 4
+            }
+          };
+        }
+        return l;
+      });
+    }
+    return {
+      ui: { ...state.ui, symmetryType: type },
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
+
+  setSymmetryAxisX: (x) => set((state) => {
+    const selectedLayerId = state.ui.selectedLayerId;
+    let updatedLayers = state.project.layers;
+    if (selectedLayerId) {
+      updatedLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            symmetry: {
+              ...(l.symmetry || { enabled: state.ui.symmetryEnabled, type: state.ui.symmetryType }),
+              axisX: x
+            }
+          };
+        }
+        return l;
+      });
+    }
+    return {
+      ui: { ...state.ui, symmetryAxisX: x },
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
+
+  setSymmetryAxisY: (y) => set((state) => {
+    const selectedLayerId = state.ui.selectedLayerId;
+    let updatedLayers = state.project.layers;
+    if (selectedLayerId) {
+      updatedLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            symmetry: {
+              ...(l.symmetry || { enabled: state.ui.symmetryEnabled, type: state.ui.symmetryType }),
+              axisY: y
+            }
+          };
+        }
+        return l;
+      });
+    }
+    return {
+      ui: { ...state.ui, symmetryAxisY: y },
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
+
+  setSymmetryRadialCount: (count) => set((state) => {
+    const selectedLayerId = state.ui.selectedLayerId;
+    let updatedLayers = state.project.layers;
+    if (selectedLayerId) {
+      updatedLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            symmetry: {
+              ...(l.symmetry || { enabled: state.ui.symmetryEnabled, type: state.ui.symmetryType }),
+              radialCount: count
+            }
+          };
+        }
+        return l;
+      });
+    }
+    return {
+      ui: { ...state.ui, symmetryRadialCount: count },
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
+
+  setSymmetryTarget: (target) => set((state) => ({ ui: { ...state.ui, symmetryTarget: target } })),
+  toggleShowSymmetryAxis: () => set((state) => ({ ui: { ...state.ui, showSymmetryAxis: !state.ui.showSymmetryAxis } })),
+  resetSymmetryToCenter: () => set((state) => {
+    const cx = state.project.canvasSize.width / 2;
+    const cy = state.project.canvasSize.height / 2;
+    const selectedLayerId = state.ui.selectedLayerId;
+    let updatedLayers = state.project.layers;
+    if (selectedLayerId) {
+      updatedLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId && l.symmetry) {
+          return {
+            ...l,
+            symmetry: {
+              ...l.symmetry,
+              axisX: cx,
+              axisY: cy
+            }
+          };
+        }
+        return l;
+      });
+    }
+    return {
+      ui: {
+        ...state.ui,
+        symmetryAxisX: cx,
+        symmetryAxisY: cy
+      },
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
+
+  toggleLayerSymmetry: (layerId) => set((state) => {
+    let nextEnabled = false;
+    const updatedLayers = state.project.layers.map(l => {
+      if (l.id === layerId) {
+        nextEnabled = !l.symmetry?.enabled;
+        return {
+          ...l,
+          symmetry: {
+            enabled: nextEnabled,
+            type: l.symmetry?.type || state.ui.symmetryType,
+            axisX: l.symmetry?.axisX ?? state.ui.symmetryAxisX ?? (state.project.canvasSize.width / 2),
+            axisY: l.symmetry?.axisY ?? state.ui.symmetryAxisY ?? (state.project.canvasSize.height / 2),
+            radialCount: l.symmetry?.radialCount ?? state.ui.symmetryRadialCount ?? 4
+          }
+        };
+      }
+      return l;
+    });
+
+    const isSelected = state.ui.selectedLayerId === layerId;
+    return {
+      project: { ...state.project, layers: updatedLayers },
+      ui: isSelected ? { ...state.ui, symmetryEnabled: nextEnabled } : state.ui
+    };
+  }),
+
+  setLayerSymmetryConfig: (layerId, config) => set((state) => {
+    const updatedLayers = state.project.layers.map(l => {
+      if (l.id === layerId) {
+        return {
+          ...l,
+          symmetry: {
+            enabled: config.enabled ?? l.symmetry?.enabled ?? true,
+            type: config.type ?? l.symmetry?.type ?? state.ui.symmetryType,
+            axisX: config.axisX ?? l.symmetry?.axisX ?? state.ui.symmetryAxisX ?? (state.project.canvasSize.width / 2),
+            axisY: config.axisY ?? l.symmetry?.axisY ?? state.ui.symmetryAxisY ?? (state.project.canvasSize.height / 2),
+            radialCount: config.radialCount ?? l.symmetry?.radialCount ?? state.ui.symmetryRadialCount ?? 4
+          }
+        };
+      }
+      return l;
+    });
+    return {
+      project: { ...state.project, layers: updatedLayers }
+    };
+  }),
   
   updateAxisValue: (axisId, value) => set((state) => {
     const cleanValue = Math.max(0, Math.min(1, value));
@@ -565,13 +864,29 @@ export const useStore = create<StoreState>((set, get) => ({
 
     // Hydrate UI if we snapped to a keyframe
     let hydratedProps = {};
+    let newSelectedStrokeId = state.ui.selectedStrokeId;
+
     if (matchingKfId) {
-        hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, matchingKfId, state.ui.selectedStrokeId);
+        if (state.ui.selectedTool === 'select' && state.ui.selectedLayerId) {
+            const kf = state.project.keyframes.find(k => k.id === matchingKfId);
+            if (kf) {
+                const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+                if (ls && ls.strokes.length > 0) {
+                    const sameStroke = ls.strokes.find(s => s.id === state.ui.selectedStrokeId);
+                    newSelectedStrokeId = sameStroke ? sameStroke.id : ls.strokes[0].id;
+                } else {
+                    newSelectedStrokeId = null;
+                }
+            }
+        }
+        hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, matchingKfId, newSelectedStrokeId);
+    } else {
+        newSelectedStrokeId = null;
     }
 
     return { 
       project: { ...state.project, axes: newAxes },
-      ui: { ...state.ui, selectedKeyframeId: matchingKfId, ...hydratedProps }
+      ui: { ...state.ui, selectedKeyframeId: matchingKfId, selectedStrokeId: newSelectedStrokeId, ...hydratedProps }
     };
   }),
 
@@ -617,13 +932,52 @@ export const useStore = create<StoreState>((set, get) => ({
   }),
 
   selectLayer: (layerId) => set((state) => {
-    const hydratedProps = getHydratedUIProps(state.project, layerId, state.ui.selectedKeyframeId, state.ui.selectedStrokeId);
-    return { ui: { ...state.ui, selectedLayerId: layerId, ...hydratedProps } };
+    let newSelectedStrokeId = null;
+    let newTool = state.ui.selectedTool;
+
+    if (newTool === 'select' && state.ui.selectedKeyframeId) {
+        const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId);
+        if (kf) {
+            const ls = kf.layerStates.find(l => l.layerId === layerId);
+            if (ls && ls.strokes.length > 0) {
+                newSelectedStrokeId = ls.strokes[0].id;
+            }
+        }
+    }
+
+    const hydratedProps = getHydratedUIProps(state.project, layerId, state.ui.selectedKeyframeId, newSelectedStrokeId);
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    let symmetryProps = {};
+    if (targetLayer?.symmetry) {
+      symmetryProps = {
+        symmetryEnabled: targetLayer.symmetry.enabled,
+        symmetryType: targetLayer.symmetry.type,
+        symmetryAxisX: targetLayer.symmetry.axisX ?? state.ui.symmetryAxisX,
+        symmetryAxisY: targetLayer.symmetry.axisY ?? state.ui.symmetryAxisY,
+        symmetryRadialCount: targetLayer.symmetry.radialCount ?? state.ui.symmetryRadialCount
+      };
+    }
+    return { ui: { ...state.ui, selectedLayerId: layerId, selectedTool: newTool, selectedStrokeId: newSelectedStrokeId, ...hydratedProps, ...symmetryProps } };
   }),
   
   selectKeyframe: (keyframeId) => set((state) => {
-    const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, keyframeId, state.ui.selectedStrokeId);
-    return { ui: { ...state.ui, selectedKeyframeId: keyframeId, ...hydratedProps } };
+    let newSelectedStrokeId = state.ui.selectedStrokeId;
+    
+    if (state.ui.selectedTool === 'select' && state.ui.selectedLayerId) {
+        const kf = state.project.keyframes.find(k => k.id === keyframeId);
+        if (kf) {
+            const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+            if (ls && ls.strokes.length > 0) {
+                const sameStroke = ls.strokes.find(s => s.id === state.ui.selectedStrokeId);
+                newSelectedStrokeId = sameStroke ? sameStroke.id : ls.strokes[0].id;
+            } else {
+                newSelectedStrokeId = null;
+            }
+        }
+    }
+
+    const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, keyframeId, newSelectedStrokeId);
+    return { ui: { ...state.ui, selectedKeyframeId: keyframeId, selectedStrokeId: newSelectedStrokeId, ...hydratedProps } };
   }),
   
   selectStroke: (strokeId) => set((state) => {
@@ -645,7 +999,7 @@ export const useStore = create<StoreState>((set, get) => ({
     };
     return {
       project: { ...state.project, layers: [...state.project.layers, newLayer] },
-      ui: { ...state.ui, selectedLayerId: newId },
+      ui: { ...state.ui, selectedLayerId: newId, selectedTool: 'pen', selectedStrokeId: null },
       history: { past, future: [] }
     };
   }),
@@ -791,6 +1145,46 @@ export const useStore = create<StoreState>((set, get) => ({
     };
   }),
 
+  setStrokeResolution: (resolution) => set((state) => {
+    const newUI = { ...state.ui, strokeResolution: resolution };
+    
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
+        const targetStrokeId = state.ui.selectedStrokeId;
+        const targetLayerId = state.ui.selectedLayerId;
+        
+        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
+
+        if (shouldUpdateStrokes) {
+            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+            const newKeyframes = state.project.keyframes.map(kf => {
+                if (kf.id !== state.ui.selectedKeyframeId) return kf;
+                return {
+                    ...kf,
+                    layerStates: kf.layerStates.map(ls => {
+                        if (ls.layerId !== targetLayerId) return ls;
+                        return {
+                            ...ls,
+                            strokes: ls.strokes.map(s => {
+                                if (targetStrokeId && s.id !== targetStrokeId) return s;
+                                return { ...s, style: { ...s.style, strokeResolution: resolution } };
+                            })
+                        };
+                    })
+                };
+            });
+
+            return { 
+               ui: newUI, 
+               project: { ...state.project, keyframes: newKeyframes },
+               history: { past, future: [] }
+            };
+        }
+    }
+
+    return { ui: newUI };
+  }),
+
   addStrokeToCurrentKeyframe: (rawPoints, closed = false, skipSimplify = false) => set((state) => {
     const { selectedLayerId, brushColor, fillColor, brushSize, smoothingEnabled, snapToGrid } = state.ui;
     if (!selectedLayerId) return state;
@@ -798,12 +1192,13 @@ export const useStore = create<StoreState>((set, get) => ({
     const layer = state.project.layers.find(l => l.id === selectedLayerId);
     if (layer?.locked || !layer?.visible) return state;
 
-    const baseStyle = layer.baseStyle || { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid', cornerRoundness: 0 };
+    const baseStyle = layer.baseStyle || { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid', cornerRoundness: 0, strokeResolution: 200 };
     const styleOverride: Partial<StyleProps> = {};
     if (brushColor !== baseStyle.strokeColor) styleOverride.strokeColor = brushColor as string;
     if (fillColor !== baseStyle.fillColor) styleOverride.fillColor = fillColor;
     if (brushSize !== baseStyle.strokeWidth) styleOverride.strokeWidth = brushSize;
     if (state.ui.cornerRoundness !== (baseStyle.cornerRoundness || 0)) styleOverride.cornerRoundness = state.ui.cornerRoundness;
+    if (state.ui.strokeResolution !== (baseStyle.strokeResolution || 200)) styleOverride.strokeResolution = state.ui.strokeResolution;
 
     let points = rawPoints;
     let shouldUpdateLayerMode = false;
@@ -847,13 +1242,34 @@ export const useStore = create<StoreState>((set, get) => ({
         }
     }
 
+    const { symmetryEnabled, symmetryType, symmetryAxisX, symmetryAxisY, symmetryRadialCount, symmetryTarget } = state.ui;
+
+    if (symmetryEnabled && symmetryTarget === 'merge' && (symmetryType === 'vertical' || symmetryType === 'horizontal')) {
+      points = getUnifiedSymmetricContour(points, symmetryType, symmetryAxisX, symmetryAxisY);
+    }
+
     const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
     
-    let updatedLayers = [...state.project.layers];
+    let updatedLayers = [...state.project.layers].filter(l => !l.id.includes('-sym-'));
     if (shouldUpdateLayerMode) {
         updatedLayers = updatedLayers.map(l => 
             l.id === selectedLayerId ? { ...l, interpolationMode: 'points' } : l
         );
+    }
+
+    if (symmetryEnabled && symmetryTarget !== 'merge') {
+      updatedLayers = updatedLayers.map(l => 
+        l.id === selectedLayerId ? {
+          ...l,
+          symmetry: {
+            enabled: true,
+            type: symmetryType,
+            axisX: symmetryAxisX ?? (state.project.canvasSize.width / 2),
+            axisY: symmetryAxisY ?? (state.project.canvasSize.height / 2),
+            radialCount: symmetryRadialCount ?? 4
+          }
+        } : l
+      );
     }
 
     const currentAxisValues: Record<string, number> = {};
@@ -883,9 +1299,9 @@ export const useStore = create<StoreState>((set, get) => ({
 
     const newKeyframes = keyframes.map(kf => {
       if (kf.id === targetKeyframeId) {
-        const existingLayerStateIndex = kf.layerStates.findIndex(ls => ls.layerId === selectedLayerId);
-        let newLayerStates = [...kf.layerStates];
-        
+        let newLayerStates = [...kf.layerStates].filter(ls => !ls.layerId.includes('-sym-'));
+
+        const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
         if (existingLayerStateIndex >= 0) {
           newLayerStates[existingLayerStateIndex] = {
             ...newLayerStates[existingLayerStateIndex],
@@ -897,6 +1313,7 @@ export const useStore = create<StoreState>((set, get) => ({
             strokes: [newStroke]
           });
         }
+
         return { ...kf, layerStates: newLayerStates };
       }
       return kf;

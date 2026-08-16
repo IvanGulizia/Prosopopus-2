@@ -1,5 +1,6 @@
 {
   "name": "Prosopopus v2",
-  "description": "High-performance vector design application with N-dimensional interpolation and state-based animation. Features cascade styles (Layer -> Stroke), top-anchored canvas resizing, and per-state corner rounding control.",
-  "requestFramePermissions": []
+  "description": "High-performance vector design application with N-dimensional interpolation, unified dynamic layer symmetry, and state-based animation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

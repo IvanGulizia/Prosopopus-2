@@ -6,8 +6,8 @@ import { BlendMode, InterpolationMode, Theme } from '../types';
 import { PALETTE_COLORS } from '../constants';
 
 export const LayerPanel: React.FC = () => {
-  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
-  const layers = project.layers;
+  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, toggleLayerSymmetry, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
+  const layers = project.layers.filter(l => !l.id.includes('-sym-'));
   const { theme } = ui;
 
   // Drag and Drop State
@@ -75,13 +75,15 @@ export const LayerPanel: React.FC = () => {
   };
 
   const getNextInterpolationMode = (current: InterpolationMode): InterpolationMode => {
-      if (current === 'resample') return 'points';
+      if (current === 'resample') return 'length';
+      if (current === 'length') return 'points';
       if (current === 'points') return 'spline';
       return 'resample';
   };
 
   const getInterpolationLabel = (mode: InterpolationMode) => {
       if (mode === 'resample') return 'CRV';
+      if (mode === 'length') return 'LEN';
       if (mode === 'points') return 'PNT';
       if (mode === 'spline') return 'SPL';
       return 'UNK';
@@ -183,6 +185,21 @@ export const LayerPanel: React.FC = () => {
             
             {/* Quick Actions */}
             <div className="flex gap-1.5 items-center">
+                 {/* Symmetry indicator and toggle */}
+                 {layer.symmetry?.enabled && (
+                   <button 
+                      onClick={(e) => { 
+                         e.stopPropagation(); 
+                         toggleLayerSymmetry(layer.id); 
+                      }}
+                      className="h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border text-indigo-600 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 flex items-center gap-0.5"
+                      title={`Symétrie active (${layer.symmetry.type || 'vertical'}). Cliquer pour désactiver.`}
+                   >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 3v18"/><path d="M16 6l4 4-4 4"/><path d="M8 6L4 10l4 4"/></svg>
+                      SYM
+                   </button>
+                 )}
+
                  {/* Interpolation Mode Toggle */}
                  <button 
                     onClick={(e) => { 
@@ -192,9 +209,11 @@ export const LayerPanel: React.FC = () => {
                     className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
                         layer.interpolationMode === 'resample' 
                         ? 'text-blue-500 bg-blue-50 border-blue-100' 
-                        : (layer.interpolationMode === 'points' 
-                            ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
-                            : 'text-amber-600 bg-amber-50 border-amber-100') // SPLINE
+                        : (layer.interpolationMode === 'length'
+                            ? 'text-purple-600 bg-purple-50 border-purple-100'
+                            : (layer.interpolationMode === 'points' 
+                                ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
+                                : 'text-amber-600 bg-amber-50 border-amber-100')) // SPLINE
                         }`}
                     title={`Mode: ${layer.interpolationMode}`}
                  >
@@ -285,21 +304,25 @@ export const SettingsPanel: React.FC = () => {
   const { 
       project, toggleSettings, ui, 
       toggleGrid, toggleSnapToGrid, setSnapScale, toggleOnionSkin, 
-      setOnionSkinOpacity, toggleSmoothing, 
+      setOnionSkinOpacity, setOnionSkinMode, toggleSmoothing, 
       resetProject, loadProject, toggleSnapMatrixGrid, 
       setAxisMatrixDivisions, setAxisMatrixPadding, 
-      setGhostStrokeOpacity, setInterpolationExponent, 
+      setGhostStrokeOpacity, setRedrawGhostOpacity,
+      setInactiveLayerOpacity, setInactiveLayerMode,
+      setInterpolationExponent, 
       setInterpolationStrategy, setGridSize,
       setResolutionScale, togglePerformanceMode,
       togglePlayModePhysics, setSpringStiffness, setSpringDamping,
       setLayerCornerRoundness, setStrokeCap,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
-      updateCanvasSize, renameProject
+      updateCanvasSize, renameProject, setStrokeResolution,
+      toggleSymmetry, setSymmetryType, setSymmetryAxisX, setSymmetryAxisY,
+      setSymmetryRadialCount, setSymmetryTarget, toggleShowSymmetryAxis, resetSymmetryToCenter
   } = useStore();
   
   const { theme, isSettingsOpen } = ui;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [openSections, setOpenSections] = useState<string[]>(['layer-styles', 'embed']);
+  const [openSections, setOpenSections] = useState<string[]>([]);
   const [applyToAllStates, setApplyToAllStates] = useState(false);
   const [embedJsonUrl, setEmbedJsonUrl] = useState('');
 
@@ -342,8 +365,11 @@ export const SettingsPanel: React.FC = () => {
               snapScale: ui.snapScale,
               onionSkinEnabled: ui.onionSkinEnabled,
               onionSkinOpacity: ui.onionSkinOpacity,
+              onionSkinMode: ui.onionSkinMode,
               inactiveLayerOpacity: ui.inactiveLayerOpacity,
+              inactiveLayerMode: ui.inactiveLayerMode,
               ghostStrokeOpacity: ui.ghostStrokeOpacity,
+              redrawGhostOpacity: ui.redrawGhostOpacity,
               smoothingEnabled: ui.smoothingEnabled,
               resolutionScale: ui.resolutionScale,
               performanceMode: ui.performanceMode,
@@ -360,7 +386,14 @@ export const SettingsPanel: React.FC = () => {
               brushSize: ui.brushSize,
               brushColor: ui.brushColor,
               fillColor: ui.fillColor,
-              cornerRoundness: ui.cornerRoundness
+              cornerRoundness: ui.cornerRoundness,
+              symmetryEnabled: ui.symmetryEnabled,
+              symmetryType: ui.symmetryType,
+              symmetryAxisX: ui.symmetryAxisX,
+              symmetryAxisY: ui.symmetryAxisY,
+              symmetryRadialCount: ui.symmetryRadialCount,
+              symmetryTarget: ui.symmetryTarget,
+              showSymmetryAxis: ui.showSymmetryAxis
           }
       };
       const data = JSON.stringify(projectWithSettings, null, 2);
@@ -413,18 +446,6 @@ export const SettingsPanel: React.FC = () => {
 
       <div className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
         
-        {/* SECTION: PROJECT NAME */}
-        <div className="space-y-2 mb-6">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Project Name</label>
-            <input 
-                type="text" 
-                value={project.name}
-                onChange={(e) => renameProject(e.target.value)}
-                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                placeholder="Untitled Project"
-            />
-        </div>
-
         {/* SECTION: LAYER GLOBAL STYLES */}
         <SettingsSection 
             title="Layer Global Styles" 
@@ -478,36 +499,6 @@ export const SettingsPanel: React.FC = () => {
                          className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
                      />
                  </SettingsRow>
-             </div>
-        </SettingsSection>
-
-        {/* SECTION: DATA (MOVED TOP) */}
-        <SettingsSection 
-            title="Project & Data"
-            isOpen={openSections.includes('project-data')}
-            onToggle={() => toggleSection('project-data')}
-            theme={theme}
-        >
-             <div className="grid grid-cols-2 gap-3 mb-4">
-                 <button onClick={() => { setExportFileName(project.name); setIsExporting(true); }} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Export JSON
-                 </button>
-                 <button onClick={() => fileInputRef.current?.click()} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    Import JSON
-                 </button>
-                 <input type="file" ref={fileInputRef} onChange={handleImport} className="hidden" accept=".json" />
-             </div>
-
-             <div className="border-t border-gray-100 pt-4">
-                <button 
-                    onClick={() => setIsResetting(true)}
-                    className="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-xs font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2 group"
-                >
-                    <svg className="group-hover:scale-110 transition-transform" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                    Reset Project
-                </button>
              </div>
         </SettingsSection>
 
@@ -605,19 +596,282 @@ export const SettingsPanel: React.FC = () => {
                  </div>
 
                  <SettingsToggle label="Enable Smoothing" active={ui.smoothingEnabled} onClick={toggleSmoothing} />
-                 
-                 <SettingsRow label="Ghost Opacity" value={`${Math.round(ui.ghostStrokeOpacity * 100)}%`}>
-                     <input type="range" min="0" max="1" step="0.05" value={ui.ghostStrokeOpacity} onChange={(e) => setGhostStrokeOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
-                 </SettingsRow>
-            </div>
+                  <SettingsToggle label="Enable Smoothing" active={ui.smoothingEnabled} onClick={toggleSmoothing} />
+             </div>
+        </SettingsSection>
 
-             <div className="bg-orange-50/50 rounded-xl p-3 border border-orange-100 space-y-2">
-                 <SettingsToggle label="Onion Skin" active={ui.onionSkinEnabled} onClick={toggleOnionSkin} />
-                 {ui.onionSkinEnabled && (
-                    <SettingsRow label="Opacity" value={`${Math.round(ui.onionSkinOpacity * 100)}%`}>
-                         <input type="range" min="0.05" max="0.5" step="0.05" value={ui.onionSkinOpacity} onChange={(e) => setOnionSkinOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-500 hover:accent-orange-600"/>
+        {/* SECTION: GHOSTING & ONION SKIN */}
+        <SettingsSection 
+            title="Ghosting & Transparency" 
+            isOpen={openSections.includes('ghosting')}
+            onToggle={() => toggleSection('ghosting')}
+            theme={theme}
+        >
+            <div className="space-y-4">
+                {/* ONION SKIN */}
+                <div className="bg-orange-50/50 rounded-xl p-3 border border-orange-100 space-y-3">
+                    <SettingsToggle label="Onion Skin (Other States)" active={ui.onionSkinEnabled} onClick={toggleOnionSkin} />
+                    
+                    {ui.onionSkinEnabled && (
+                       <div className="space-y-3 pt-2 border-t border-orange-200/40">
+                           <SettingsRow label="Onion Skin Opacity" value={`${Math.round(ui.onionSkinOpacity * 100)}%`}>
+                               <input type="range" min="0.05" max="0.8" step="0.05" value={ui.onionSkinOpacity} onChange={(e) => setOnionSkinOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-500 hover:accent-orange-600"/>
+                           </SettingsRow>
+
+                           <div>
+                               <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5 block">Representation Mode</label>
+                               <div className="grid grid-cols-3 gap-1 bg-white/80 rounded-xl p-1 border border-orange-100">
+                                   <button 
+                                       onClick={() => setOnionSkinMode('wireframe')} 
+                                       className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.onionSkinMode === 'wireframe' ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                   >
+                                       Thin Blue
+                                   </button>
+                                   <button 
+                                       onClick={() => setOnionSkinMode('styled')} 
+                                       className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.onionSkinMode === 'styled' ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                   >
+                                       Translucent
+                                   </button>
+                                   <button 
+                                       onClick={() => setOnionSkinMode('both')} 
+                                       className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.onionSkinMode === 'both' ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                   >
+                                       Both
+                                   </button>
+                               </div>
+                           </div>
+                       </div>
+                    )}
+                </div>
+
+                {/* CANVAS TRANSPARENCY & REDRAW GHOSTING */}
+                <div className="bg-blue-50/40 rounded-xl p-3 border border-blue-100 space-y-3">
+                    <label className="text-xs font-bold text-gray-700 uppercase tracking-wider block">State & Redraw Transparency</label>
+                    
+                    <SettingsRow label="Matrix Ghost Opacity" value={`${Math.round(ui.ghostStrokeOpacity * 100)}%`}>
+                        <input type="range" min="0.05" max="1" step="0.05" value={ui.ghostStrokeOpacity} onChange={(e) => setGhostStrokeOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                     </SettingsRow>
-                 )}
+                    <p className="text-[10px] text-gray-400">Opacity of interpolated shape when moving in the Matrix to unkeyed positions.</p>
+
+                    <div className="pt-2 border-t border-blue-100">
+                        <SettingsRow label="Redraw Ghost Opacity" value={`${Math.round((ui.redrawGhostOpacity ?? 0.25) * 100)}%`}>
+                            <input type="range" min="0.05" max="0.8" step="0.05" value={ui.redrawGhostOpacity ?? 0.25} onChange={(e) => setRedrawGhostOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                        </SettingsRow>
+                        <p className="text-[10px] text-gray-400">Dims existing stroke while you redraw a new stroke over it to replace it.</p>
+                    </div>
+                </div>
+
+                {/* INACTIVE LAYERS */}
+                <div className="bg-gray-50/70 rounded-xl p-3 border border-gray-100 space-y-3">
+                    <label className="text-xs font-bold text-gray-700 uppercase tracking-wider block">Unselected Layers</label>
+                    
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Display Style</label>
+                        <div className="grid grid-cols-4 gap-1 bg-white rounded-xl p-1 border border-gray-200">
+                            <button 
+                                onClick={() => setInactiveLayerMode('dimmed')} 
+                                className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.inactiveLayerMode === 'dimmed' ? 'bg-blue-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                            >
+                                Dimmed
+                            </button>
+                            <button 
+                                onClick={() => setInactiveLayerMode('wireframe')} 
+                                className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.inactiveLayerMode === 'wireframe' ? 'bg-blue-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                            >
+                                Wireframe
+                            </button>
+                            <button 
+                                onClick={() => setInactiveLayerMode('normal')} 
+                                className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.inactiveLayerMode === 'normal' ? 'bg-blue-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                            >
+                                Normal
+                            </button>
+                            <button 
+                                onClick={() => setInactiveLayerMode('hidden')} 
+                                className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${ui.inactiveLayerMode === 'hidden' ? 'bg-blue-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                            >
+                                Hidden
+                            </button>
+                        </div>
+                    </div>
+
+                    {ui.inactiveLayerMode !== 'normal' && ui.inactiveLayerMode !== 'hidden' && (
+                        <SettingsRow label="Inactive Opacity" value={`${Math.round(ui.inactiveLayerOpacity * 100)}%`}>
+                            <input type="range" min="0.05" max="0.9" step="0.05" value={ui.inactiveLayerOpacity} onChange={(e) => setInactiveLayerOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                        </SettingsRow>
+                    )}
+                </div>
+            </div>
+        </SettingsSection>
+
+        {/* SECTION: SYMMETRY */}
+        <SettingsSection 
+            title="Symmetry" 
+            isOpen={openSections.includes('symmetry')}
+            onToggle={() => toggleSection('symmetry')}
+            theme={theme}
+        >
+            <div className="space-y-4">
+                <SettingsToggle label="Active Symmetry Mode" active={ui.symmetryEnabled} onClick={toggleSymmetry} />
+
+                {ui.symmetryEnabled && (
+                    <div className="space-y-4 pt-2 border-t border-gray-100">
+                        {/* Type Selector */}
+                        <div>
+                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Symmetry Mode</label>
+                            <div className="grid grid-cols-4 gap-1.5 bg-gray-100/80 rounded-xl p-1">
+                                <button 
+                                    onClick={() => setSymmetryType('vertical')} 
+                                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${ui.symmetryType === 'vertical' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Vertical
+                                </button>
+                                <button 
+                                    onClick={() => setSymmetryType('horizontal')} 
+                                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${ui.symmetryType === 'horizontal' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Horizontal
+                                </button>
+                                <button 
+                                    onClick={() => setSymmetryType('quad')} 
+                                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${ui.symmetryType === 'quad' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Quad
+                                </button>
+                                <button 
+                                    onClick={() => setSymmetryType('radial')} 
+                                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${ui.symmetryType === 'radial' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Radial
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Radial Segments */}
+                        {ui.symmetryType === 'radial' && (
+                            <SettingsRow label="Radial Segments" value={`${ui.symmetryRadialCount || 4}x`}>
+                                <input 
+                                    type="range" 
+                                    min="2" 
+                                    max="12" 
+                                    step="1" 
+                                    value={ui.symmetryRadialCount || 4} 
+                                    onChange={(e) => setSymmetryRadialCount(parseInt(e.target.value))} 
+                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                                />
+                            </SettingsRow>
+                        )}
+
+                        {/* Axis Position */}
+                        <div className="space-y-3 bg-gray-50/70 rounded-xl p-3 border border-gray-100">
+                            <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Axis Center</label>
+                                <button 
+                                    onClick={resetSymmetryToCenter}
+                                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 transition-colors"
+                                >
+                                    Reset to Center
+                                </button>
+                            </div>
+
+                            {(ui.symmetryType === 'vertical' || ui.symmetryType === 'quad' || ui.symmetryType === 'radial') && (
+                                <SettingsRow label="X Center" value={`${Math.round(ui.symmetryAxisX ?? (project.canvasSize.width / 2))}px`}>
+                                    <input 
+                                        type="range" 
+                                        min="0" 
+                                        max={project.canvasSize.width} 
+                                        step="5" 
+                                        value={ui.symmetryAxisX ?? (project.canvasSize.width / 2)} 
+                                        onChange={(e) => setSymmetryAxisX(parseInt(e.target.value))} 
+                                        className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                                    />
+                                </SettingsRow>
+                            )}
+
+                            {(ui.symmetryType === 'horizontal' || ui.symmetryType === 'quad' || ui.symmetryType === 'radial') && (
+                                <SettingsRow label="Y Center" value={`${Math.round(ui.symmetryAxisY ?? (project.canvasSize.height / 2))}px`}>
+                                    <input 
+                                        type="range" 
+                                        min="0" 
+                                        max={project.canvasSize.height} 
+                                        step="5" 
+                                        value={ui.symmetryAxisY ?? (project.canvasSize.height / 2)} 
+                                        onChange={(e) => setSymmetryAxisY(parseInt(e.target.value))} 
+                                        className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                                    />
+                                </SettingsRow>
+                            )}
+                        </div>
+
+                        {/* Symmetry Target / Merge vs Dynamic */}
+                        {(ui.symmetryType === 'vertical' || ui.symmetryType === 'horizontal') && (
+                            <div>
+                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 block">Symmetry Output</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button 
+                                        onClick={() => setSymmetryTarget('layer')} 
+                                        className={`py-2 px-3 text-xs font-semibold rounded-xl border text-left transition-all ${ui.symmetryTarget === 'layer' ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                    >
+                                        <div className="font-bold">Dynamic Mirror</div>
+                                        <div className="text-[10px] text-gray-400 font-normal">Single layer with live reflection</div>
+                                    </button>
+                                    <button 
+                                        onClick={() => setSymmetryTarget('merge')} 
+                                        className={`py-2 px-3 text-xs font-semibold rounded-xl border text-left transition-all ${ui.symmetryTarget === 'merge' ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                    >
+                                        <div className="font-bold">Unified Contour</div>
+                                        <div className="text-[10px] text-gray-400 font-normal">Connects into 1 single closed loop</div>
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <SettingsToggle label="Show Guide Axis on Canvas" active={ui.showSymmetryAxis} onClick={toggleShowSymmetryAxis} />
+                    </div>
+                )}
+            </div>
+        </SettingsSection>
+
+        {/* SECTION: DATA */}
+        <SettingsSection 
+            title="Project & Data"
+            isOpen={openSections.includes('project-data')}
+            onToggle={() => toggleSection('project-data')}
+            theme={theme}
+        >
+             {/* SECTION: PROJECT NAME */}
+             <div className="space-y-2 mb-6">
+                 <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Project Name</label>
+                 <input 
+                     type="text" 
+                     value={project.name}
+                     onChange={(e) => renameProject(e.target.value)}
+                     className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                     placeholder="Untitled Project"
+                 />
+             </div>
+
+             <div className="grid grid-cols-2 gap-3 mb-4">
+                 <button onClick={() => { setExportFileName(project.name); setIsExporting(true); }} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Export JSON
+                 </button>
+                 <button onClick={() => fileInputRef.current?.click()} className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Import JSON
+                 </button>
+                 <input type="file" ref={fileInputRef} onChange={handleImport} className="hidden" accept=".json" />
+             </div>
+
+             <div className="border-t border-gray-100 pt-4">
+                <button 
+                    onClick={() => setIsResetting(true)}
+                    className="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-xs font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2 group"
+                >
+                    <svg className="group-hover:scale-110 transition-transform" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    Reset Project
+                </button>
              </div>
         </SettingsSection>
 
@@ -754,8 +1008,8 @@ export const SettingsPanel: React.FC = () => {
                      )}
                  </div>
 
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Algorithm</label>
-                <div className="flex bg-gray-100/80 rounded-xl p-1.5 gap-1">
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block mt-4">Algorithm</label>
+                <div className="flex bg-gray-100/80 rounded-xl p-1.5 gap-1 mb-4">
                     <button onClick={() => setInterpolationStrategy('bilinear-grid')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${ui.interpolationStrategy === 'bilinear-grid' ? 'bg-white shadow text-blue-600 ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-700'}`}>
                         Bilinear Grid
                     </button>
@@ -763,6 +1017,11 @@ export const SettingsPanel: React.FC = () => {
                         Radial (IDW)
                     </button>
                 </div>
+
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Stroke Definition</label>
+                <SettingsRow label="Max Points (Resolution)" value={`${ui.strokeResolution} pts`}>
+                    <input type="range" min="10" max="1000" step="10" value={ui.strokeResolution} onChange={(e) => setStrokeResolution(parseInt(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                </SettingsRow>
              </div>
         </SettingsSection>
 
