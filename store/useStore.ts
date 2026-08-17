@@ -58,6 +58,12 @@ interface StoreState {
   togglePlayModePhysics: () => void;
   setSpringStiffness: (val: number) => void;
   setSpringDamping: (val: number) => void;
+  toggleOvershootBounciness: () => void;
+  setOvershootBounciness: (val: number) => void;
+  toggleOvershootRubberband: () => void;
+  setOvershootRubberbandFactor: (val: number) => void;
+  toggleOvershootMomentum: () => void;
+  setOvershootMomentumFactor: (val: number) => void;
 
   setGridSize: (size: number) => void;
   toggleSmoothing: () => void; // Renamed from toggleSimplifyStrokes
@@ -621,6 +627,12 @@ export const useStore = create<StoreState>((set, get) => ({
   togglePlayModePhysics: () => set((state) => ({ ui: { ...state.ui, playModePhysics: !state.ui.playModePhysics } })),
   setSpringStiffness: (val) => set((state) => ({ ui: { ...state.ui, springStiffness: val } })),
   setSpringDamping: (val) => set((state) => ({ ui: { ...state.ui, springDamping: val } })),
+  toggleOvershootBounciness: () => set((state) => ({ ui: { ...state.ui, overshootBouncinessEnabled: !state.ui.overshootBouncinessEnabled } })),
+  setOvershootBounciness: (val) => set((state) => ({ ui: { ...state.ui, overshootBounciness: val } })),
+  toggleOvershootRubberband: () => set((state) => ({ ui: { ...state.ui, overshootRubberbandEnabled: !state.ui.overshootRubberbandEnabled } })),
+  setOvershootRubberbandFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootRubberbandFactor: val } })),
+  toggleOvershootMomentum: () => set((state) => ({ ui: { ...state.ui, overshootMomentumEnabled: !state.ui.overshootMomentumEnabled } })),
+  setOvershootMomentumFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootMomentumFactor: val } })),
 
   setGridSize: (size) => set((state) => ({ ui: { ...state.ui, gridSize: size } })),
   toggleSmoothing: () => set((state) => ({ ui: { ...state.ui, smoothingEnabled: !state.ui.smoothingEnabled } })),

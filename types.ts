@@ -156,10 +156,30 @@ export interface UIState {
   interpolationStrategy: InterpolationStrategy; // New
   interpolationExponent: number; // Controls the "falloff" for IDW mode
   
-  // PHYSICS (Spring System)
+  // PHYSICS (Spring System & Overshoot)
   playModePhysics: boolean; // Enable physics in Play Mode
   springStiffness: number; // Tension (k)
   springDamping: number;   // Friction (c)
+  
+  // OVERSHOOT MODES & FACTORS (Can be toggled and combined)
+  overshootBouncinessEnabled: boolean; // Option A: Underdamped harmonic spring oscillation
+  overshootBounciness: number;         // 0 to 1 (0 = critical damping, 1 = maximum springy oscillation)
+  
+  overshootRubberbandEnabled: boolean;  // Option B: Rubber-band extension beyond active padding / borders
+  overshootRubberbandFactor: number;   // 0 to 1 (pull strength into margin/outside bounds)
+
+  overshootMomentumEnabled: boolean;   // Option C: Kinetic momentum impulse projection based on cursor gesture speed
+  overshootMomentumFactor: number;     // 0 to 1 (extrapolation multiplier)
+
+  // GEOMETRIC / INTERPOLATED SHAPE OVERSHOOT (Vertex-level extrapolation)
+  shapeExtrapolationLinearEnabled: boolean;    // Approche A: Linear vector extrapolation (negative weights / > 1.0 amplification)
+  shapeExtrapolationLinearFactor: number;     // 0 to 1 (0% to +100% extrapolation beyond keyframe drawings)
+
+  shapeExtrapolationInertiaEnabled: boolean;   // Approche B: Vertex dynamic velocity / inertial follow-through
+  shapeExtrapolationInertiaFactor: number;    // 0 to 1 (intensity of vertex inertia follow-through)
+
+  shapeExtrapolationOverdriveEnabled: boolean; // Approche C: Keyframe displacement overdrive / exaggeration multiplier
+  shapeExtrapolationOverdriveFactor: number;  // 0 to 1 (0% to +100% exaggeration from center baseline)
 
   gridSize: number;
   

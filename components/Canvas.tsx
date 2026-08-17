@@ -29,6 +29,9 @@ export const Canvas: React.FC = () => {
   // -- Physics State (Refs to avoid re-renders) --
   const targetAxesRef = useRef<Record<string, number>>({ 'axis-x': 0.5, 'axis-y': 0.5 });
   const velocityRef = useRef<{ x: number, y: number }>({ x: 0, y: 0 });
+  const pointerVelocityRef = useRef<{ x: number, y: number }>({ x: 0, y: 0 });
+  const lastPointerTimeRef = useRef<number>(0);
+  const lastPointerPosRef = useRef<{ x: number, y: number }>({ x: 0.5, y: 0.5 });
   
   // Play Mode Local Physics State (Decoupled from Store)
   const playModeAxesRef = useRef<Record<string, number>>({ 'axis-x': 0.5, 'axis-y': 0.5 });
@@ -136,31 +139,119 @@ export const Canvas: React.FC = () => {
     const axisY = project.axes.find(a => a.id === 'axis-y');
     if (axisX && axisY) {
         playModeAxesRef.current = { 'axis-x': axisX.currentValue, 'axis-y': axisY.currentValue };
+        targetAxesRef.current = { 'axis-x': axisX.currentValue, 'axis-y': axisY.currentValue };
+        velocityRef.current = { x: 0, y: 0 };
+        pointerVelocityRef.current = { x: 0, y: 0 };
+        lastPointerPosRef.current = { x: axisX.currentValue, y: axisY.currentValue };
+        lastPointerTimeRef.current = performance.now();
     }
 
     const handleWindowPointerMove = (e: PointerEvent) => {
         if (!canvasRef.current) return;
         const rect = canvasRef.current.getBoundingClientRect();
         
-        let normX = (e.clientX - rect.left) / rect.width;
-        let normY = (e.clientY - rect.top) / rect.height;
+        const rawNormX = (e.clientX - rect.left) / rect.width;
+        const rawNormY = (e.clientY - rect.top) / rect.height;
         
-        normX = Math.max(0, Math.min(1, normX));
-        normY = Math.max(0, Math.min(1, normY));
+        // Track pointer velocity for momentum extrapolation (Option C)
+        const now = performance.now();
+        const dt = Math.max(0.005, (now - (lastPointerTimeRef.current || now)) / 1000);
+        lastPointerTimeRef.current = now;
+        
+        const deltaX = rawNormX - lastPointerPosRef.current.x;
+        const deltaY = rawNormY - lastPointerPosRef.current.y;
+        lastPointerPosRef.current = { x: rawNormX, y: rawNormY };
 
+        // Exponential smoothing on pointer velocity
+        const instantVelX = deltaX / dt;
+        const instantVelY = deltaY / dt;
+        pointerVelocityRef.current.x = pointerVelocityRef.current.x * 0.4 + instantVelX * 0.6;
+        pointerVelocityRef.current.y = pointerVelocityRef.current.y * 0.4 + instantVelY * 0.6;
+
+        const padding = ui.axisMatrixPadding ?? 0;
+        const minX = Math.max(0, padding);
+        const maxX = Math.min(1, 1 - padding);
+        const minY = Math.max(0, padding);
+        const maxY = Math.min(1, 1 - padding);
+
+        let processedX = rawNormX;
+        let processedY = rawNormY;
+
+        // OPTION B: Rubberband Border Overshoot (Logarithmic resistance beyond active margin/padding)
+        if (ui.overshootRubberbandEnabled) {
+            const factor = ui.overshootRubberbandFactor ?? 0.35;
+            if (processedX < minX) {
+                const overflow = minX - processedX;
+                processedX = minX - (overflow * factor);
+            } else if (processedX > maxX) {
+                const overflow = processedX - maxX;
+                processedX = maxX + (overflow * factor);
+            }
+
+            if (processedY < minY) {
+                const overflow = minY - processedY;
+                processedY = minY - (overflow * factor);
+            } else if (processedY > maxY) {
+                const overflow = processedY - maxY;
+                processedY = maxY + (overflow * factor);
+            }
+
+            // Still bound within absolute container limits [0, 1]
+            processedX = Math.max(0, Math.min(1, processedX));
+            processedY = Math.max(0, Math.min(1, processedY));
+        } else {
+            // Standard clamping
+            processedX = Math.max(minX, Math.min(maxX, processedX));
+            processedY = Math.max(minY, Math.min(maxY, processedY));
+        }
+
+        // Snap Grid in Play Mode
         if (ui.snapPlayMode) {
-            normX = Math.round(normX * 10) / 10;
-            normY = Math.round(normY * 10) / 10;
+            const effectiveSizeX = maxX - minX;
+            const effectiveSizeY = maxY - minY;
+            if (effectiveSizeX > 0 && effectiveSizeY > 0) {
+                const divisions = (ui.axisMatrixDivisions && ui.axisMatrixDivisions > 1) 
+                    ? ui.axisMatrixDivisions - 1 
+                    : 10;
+                const relX = (processedX - minX) / effectiveSizeX;
+                const relY = (processedY - minY) / effectiveSizeY;
+                const snappedRelX = Math.round(relX * divisions) / divisions;
+                const snappedRelY = Math.round(relY * divisions) / divisions;
+                processedX = minX + (snappedRelX * effectiveSizeX);
+                processedY = minY + (snappedRelY * effectiveSizeY);
+            }
+        }
+
+        // OPTION C: Momentum / Kinetic Impulse Boost
+        if (ui.overshootMomentumEnabled) {
+            const momentumMult = (ui.overshootMomentumFactor ?? 0.4) * 0.15;
+            // Project target forward with velocity
+            processedX += pointerVelocityRef.current.x * momentumMult;
+            processedY += pointerVelocityRef.current.y * momentumMult;
+            
+            // Allow momentum to reach up to absolute 0..1 bounds
+            processedX = Math.max(0, Math.min(1, processedX));
+            processedY = Math.max(0, Math.min(1, processedY));
         }
         
-        targetAxesRef.current = { 'axis-x': normX, 'axis-y': normY };
+        targetAxesRef.current = { 'axis-x': processedX, 'axis-y': processedY };
     };
 
     window.addEventListener('pointermove', handleWindowPointerMove);
     return () => {
         window.removeEventListener('pointermove', handleWindowPointerMove);
     };
-  }, [ui.mode, ui.snapPlayMode]);
+  }, [
+    ui.mode, 
+    ui.snapPlayMode, 
+    ui.axisMatrixPadding, 
+    ui.axisMatrixDivisions, 
+    ui.overshootRubberbandEnabled, 
+    ui.overshootRubberbandFactor, 
+    ui.overshootMomentumEnabled, 
+    ui.overshootMomentumFactor, 
+    project.axes
+  ]);
 
   const handleDoubleClick = (e: React.MouseEvent) => {
       if (ui.selectedTool === 'polyline') {
@@ -638,7 +729,20 @@ export const Canvas: React.FC = () => {
 
               if (currentUI.playModePhysics) {
                   const stiffness = currentUI.springStiffness || 120;
-                  const damping = currentUI.springDamping || 20;
+                  let damping = currentUI.springDamping || 20;
+                  
+                  // OPTION A: Bounciness / Harmonic Spring Overshoot (Underdamped factor)
+                  if (currentUI.overshootBouncinessEnabled) {
+                      const bounciness = currentUI.overshootBounciness ?? 0.5;
+                      // Critical damping coefficient c_critical = 2 * sqrt(stiffness) (assuming unit mass m=1)
+                      const criticalDamping = 2 * Math.sqrt(stiffness);
+                      // As bounciness approaches 1, damping drops down towards 15% of critical damping, causing strong springy overshoots
+                      const minDamping = criticalDamping * 0.15;
+                      const maxDamping = criticalDamping * 1.2;
+                      // Interpolate between base damping and bouncy underdamped curve
+                      const targetUnderdamping = maxDamping - bounciness * (maxDamping - minDamping);
+                      damping = Math.min(damping, targetUnderdamping);
+                  }
                   
                   const forceX = (targetX - nextX) * stiffness - velocityRef.current.x * damping;
                   const forceY = (targetY - nextY) * stiffness - velocityRef.current.y * damping;
@@ -648,6 +752,15 @@ export const Canvas: React.FC = () => {
                   
                   nextX += velocityRef.current.x * dt;
                   nextY += velocityRef.current.y * dt;
+
+                  if (Math.abs(velocityRef.current.x) < 0.0001 && Math.abs(targetX - nextX) < 0.0001) {
+                      nextX = targetX;
+                      velocityRef.current.x = 0;
+                  }
+                  if (Math.abs(velocityRef.current.y) < 0.0001 && Math.abs(targetY - nextY) < 0.0001) {
+                      nextY = targetY;
+                      velocityRef.current.y = 0;
+                  }
               } else {
                   nextX = targetX;
                   nextY = targetY;

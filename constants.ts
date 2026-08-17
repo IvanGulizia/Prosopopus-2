@@ -113,7 +113,23 @@ export const INITIAL_UI_STATE: UIState = {
   
   playModePhysics: true, // DEFAULT ENABLED
   springStiffness: 250, // High stiffness = Fast response
-  springDamping: 15,    // Critical damping-ish to avoid wobble
+  springDamping: 15,    // Base damping
+  
+  // Overshoot initial defaults (Cursor / Matrix Level)
+  overshootBouncinessEnabled: false,
+  overshootBounciness: 0.5,
+  overshootRubberbandEnabled: true,
+  overshootRubberbandFactor: 0.35,
+  overshootMomentumEnabled: false,
+  overshootMomentumFactor: 0.4,
+
+  // Geometric / Interpolated Shape Overshoot defaults (Vertex Level)
+  shapeExtrapolationLinearEnabled: false,
+  shapeExtrapolationLinearFactor: 0.35,
+  shapeExtrapolationInertiaEnabled: false,
+  shapeExtrapolationInertiaFactor: 0.4,
+  shapeExtrapolationOverdriveEnabled: false,
+  shapeExtrapolationOverdriveFactor: 0.3,
 
   gridSize: 40, 
   

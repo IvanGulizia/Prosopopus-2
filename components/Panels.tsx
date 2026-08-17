@@ -313,6 +313,9 @@ export const SettingsPanel: React.FC = () => {
       setInterpolationStrategy, setGridSize,
       setResolutionScale, togglePerformanceMode,
       togglePlayModePhysics, setSpringStiffness, setSpringDamping,
+      toggleOvershootBounciness, setOvershootBounciness,
+      toggleOvershootRubberband, setOvershootRubberbandFactor,
+      toggleOvershootMomentum, setOvershootMomentumFactor,
       setLayerCornerRoundness, setStrokeCap,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
       updateCanvasSize, renameProject, setStrokeResolution,
@@ -382,6 +385,12 @@ export const SettingsPanel: React.FC = () => {
               playModePhysics: ui.playModePhysics,
               springStiffness: ui.springStiffness,
               springDamping: ui.springDamping,
+              overshootBouncinessEnabled: ui.overshootBouncinessEnabled,
+              overshootBounciness: ui.overshootBounciness,
+              overshootRubberbandEnabled: ui.overshootRubberbandEnabled,
+              overshootRubberbandFactor: ui.overshootRubberbandFactor,
+              overshootMomentumEnabled: ui.overshootMomentumEnabled,
+              overshootMomentumFactor: ui.overshootMomentumFactor,
               strokeCap: ui.strokeCap,
               brushSize: ui.brushSize,
               brushColor: ui.brushColor,
@@ -1004,6 +1013,40 @@ export const SettingsPanel: React.FC = () => {
                             <SettingsRow label="Damping (Friction)" value={`${ui.springDamping}`}>
                                 <input type="range" min="1" max="50" step="1" value={ui.springDamping} onChange={(e) => setSpringDamping(parseInt(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                             </SettingsRow>
+
+                            <div className="pt-2 border-t border-blue-200/60 space-y-2.5">
+                                <label className="text-[11px] font-bold text-blue-900/80 uppercase tracking-wider block">Overshoot Modes (Combinable)</label>
+
+                                {/* Solution 1: Physical / Harmonic Spring Overshoot */}
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                    <SettingsToggle label="1. Physical Spring Bounciness" active={ui.overshootBouncinessEnabled} onClick={toggleOvershootBounciness} />
+                                    {ui.overshootBouncinessEnabled && (
+                                        <SettingsRow label="Rebound Intensity" value={`${Math.round((ui.overshootBounciness ?? 0.5) * 100)}%`}>
+                                            <input type="range" min="0" max="1" step="0.05" value={ui.overshootBounciness ?? 0.5} onChange={(e) => setOvershootBounciness(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                        </SettingsRow>
+                                    )}
+                                </div>
+
+                                {/* Solution 2: Rubberband Border Overshoot */}
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                    <SettingsToggle label="2. Border Rubber-banding" active={ui.overshootRubberbandEnabled} onClick={toggleOvershootRubberband} />
+                                    {ui.overshootRubberbandEnabled && (
+                                        <SettingsRow label="Margin Elasticity" value={`${Math.round((ui.overshootRubberbandFactor ?? 0.35) * 100)}%`}>
+                                            <input type="range" min="0.05" max="0.8" step="0.05" value={ui.overshootRubberbandFactor ?? 0.35} onChange={(e) => setOvershootRubberbandFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                        </SettingsRow>
+                                    )}
+                                </div>
+
+                                {/* Solution 3: Kinetic Momentum Impulse */}
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                    <SettingsToggle label="3. Kinetic Gesture Momentum" active={ui.overshootMomentumEnabled} onClick={toggleOvershootMomentum} />
+                                    {ui.overshootMomentumEnabled && (
+                                        <SettingsRow label="Impulse Extrapolation" value={`${Math.round((ui.overshootMomentumFactor ?? 0.4) * 100)}%`}>
+                                            <input type="range" min="0.1" max="1" step="0.05" value={ui.overshootMomentumFactor ?? 0.4} onChange={(e) => setOvershootMomentumFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                        </SettingsRow>
+                                    )}
+                                </div>
+                            </div>
                         </>
                      )}
                  </div>
