@@ -171,15 +171,19 @@ export interface UIState {
   overshootMomentumEnabled: boolean;   // Option C: Kinetic momentum impulse projection based on cursor gesture speed
   overshootMomentumFactor: number;     // 0 to 1 (extrapolation multiplier)
 
-  // GEOMETRIC / INTERPOLATED SHAPE OVERSHOOT (Vertex-level extrapolation)
-  shapeExtrapolationLinearEnabled: boolean;    // Approche A: Linear vector extrapolation (negative weights / > 1.0 amplification)
-  shapeExtrapolationLinearFactor: number;     // 0 to 1 (0% to +100% extrapolation beyond keyframe drawings)
+  // GEOMETRIC & INTERPOLATION OVERSHOOT (Shape Extrapolation / Vertex Dynamics)
+  // Approche A : Linear State Extrapolation / Negative Weights (weights beyond [0, 1])
+  overshootExtrapolationEnabled: boolean;
+  overshootExtrapolationFactor: number; // 0 to 1.0 (multiplier for projection beyond pose)
 
-  shapeExtrapolationInertiaEnabled: boolean;   // Approche B: Vertex dynamic velocity / inertial follow-through
-  shapeExtrapolationInertiaFactor: number;    // 0 to 1 (intensity of vertex inertia follow-through)
+  // Approche B : Vertex Inertial Velocity / Dynamic Jiggle (Disney Follow-Through)
+  overshootVertexInertiaEnabled: boolean;
+  overshootVertexInertiaFactor: number; // 0 to 1.0 (vertex velocity momentum force)
+  overshootVertexDamping: number;       // 0.5 to 0.98 (decay rate of vertex inertia)
 
-  shapeExtrapolationOverdriveEnabled: boolean; // Approche C: Keyframe displacement overdrive / exaggeration multiplier
-  shapeExtrapolationOverdriveFactor: number;  // 0 to 1 (0% to +100% exaggeration from center baseline)
+  // Approche C : Keyframe Exaggeration / Overdrive Slider
+  overshootExaggerationEnabled: boolean;
+  overshootExaggerationFactor: number;  // 1.0 to 2.5 (geometric shape extrusion multiplier)
 
   gridSize: number;
   

@@ -257,7 +257,9 @@ const alignPoints = (reference: Point[], target: Point[], isClosed: boolean): Po
 
 const calculateBilinearGridWeights = (
   currentAxes: Record<string, number>,
-  keyframes: { id: string; axisValues: Record<string, number> }[]
+  keyframes: { id: string; axisValues: Record<string, number> }[],
+  allowExtrapolation: boolean = false,
+  extrapolationFactor: number = 0.2
 ) => {
   const weights: Record<string, number> = {};
   
@@ -283,8 +285,29 @@ const calculateBilinearGridWeights = (
   }
 
   const findInterval = (val: number, grid: number[]) => {
-      if (val <= grid[0]) return { lower: grid[0], upper: grid[0], t: 0 };
-      if (val >= grid[grid.length - 1]) return { lower: grid[grid.length - 1], upper: grid[grid.length - 1], t: 0 };
+      if (grid.length === 1) return { lower: grid[0], upper: grid[0], t: 0 };
+      
+      if (val < grid[0]) {
+          const span = grid[1] - grid[0];
+          const rawT = span === 0 ? 0 : (val - grid[0]) / span;
+          if (allowExtrapolation) {
+              const clampedT = Math.max(-extrapolationFactor, rawT);
+              return { lower: grid[0], upper: grid[1], t: clampedT };
+          }
+          return { lower: grid[0], upper: grid[0], t: 0 };
+      }
+      
+      if (val > grid[grid.length - 1]) {
+          const lastIdx = grid.length - 1;
+          const span = grid[lastIdx] - grid[lastIdx - 1];
+          const rawT = span === 0 ? 1 : 1 + (val - grid[lastIdx]) / span;
+          if (allowExtrapolation) {
+              const clampedT = Math.min(1 + extrapolationFactor, rawT);
+              return { lower: grid[lastIdx - 1], upper: grid[lastIdx], t: clampedT };
+          }
+          return { lower: grid[lastIdx], upper: grid[lastIdx], t: 0 };
+      }
+
       for (let i = 0; i < grid.length - 1; i++) {
           if (val >= grid[i] && val <= grid[i+1]) {
               const span = grid[i+1] - grid[i];
@@ -328,7 +351,7 @@ const calculateBilinearGridWeights = (
   ];
 
   corners.forEach(c => {
-      if (c.wBase <= 0.0001) return;
+      if (Math.abs(c.wBase) <= 0.0001) return;
       const cornerComposition = resolveCornerWeights(c.x, c.y);
       for (const kfId in cornerComposition) {
           weights[kfId] = (weights[kfId] || 0) + (cornerComposition[kfId] * c.wBase);
@@ -338,7 +361,13 @@ const calculateBilinearGridWeights = (
   return weights;
 };
 
-const calculateIDWWeights = (currentAxes: Record<string, number>, keyframes: { id: string; axisValues: Record<string, number> }[], exponent: number) => {
+const calculateIDWWeights = (
+    currentAxes: Record<string, number>, 
+    keyframes: { id: string; axisValues: Record<string, number> }[], 
+    exponent: number,
+    allowExtrapolation: boolean = false,
+    extrapolationFactor: number = 0.2
+) => {
     const weights: Record<string, number> = {};
     let totalWeight = 0;
     for (const kf of keyframes) {
@@ -355,6 +384,21 @@ const calculateIDWWeights = (currentAxes: Record<string, number>, keyframes: { i
         totalWeight += w;
     }
     for (const id in weights) weights[id] /= totalWeight;
+
+    // Approach A: If extrapolation enabled in IDW mode, project dominant keyframe past 1.0 while slightly depressing distant keyframes
+    if (allowExtrapolation && keyframes.length > 1) {
+        const sorted = Object.entries(weights).sort((a, b) => b[1] - a[1]);
+        const dominantId = sorted[0][0];
+        const dominantWeight = sorted[0][1];
+        if (dominantWeight > 0.5) {
+            const extra = (dominantWeight - 0.5) * 2 * extrapolationFactor;
+            weights[dominantId] += extra;
+            for (let i = 1; i < sorted.length; i++) {
+                weights[sorted[i][0]] -= extra / (sorted.length - 1);
+            }
+        }
+    }
+
     return weights;
 };
 
@@ -362,39 +406,51 @@ export const calculateInterpolationWeights = (
   currentAxes: Record<string, number>,
   keyframes: { id: string; axisValues: Record<string, number> }[],
   exponent: number = 2,
-  strategy: InterpolationStrategy = 'bilinear-grid'
+  strategy: InterpolationStrategy = 'bilinear-grid',
+  allowExtrapolation: boolean = false,
+  extrapolationFactor: number = 0.2
 ): Record<string, number> => {
    if (keyframes.length === 0) return {};
    if (keyframes.length === 1) return { [keyframes[0].id]: 1.0 };
-   if (strategy === 'bilinear-grid') return calculateBilinearGridWeights(currentAxes, keyframes);
-   return calculateIDWWeights(currentAxes, keyframes, exponent);
+   if (strategy === 'bilinear-grid') return calculateBilinearGridWeights(currentAxes, keyframes, allowExtrapolation, extrapolationFactor);
+   return calculateIDWWeights(currentAxes, keyframes, exponent, allowExtrapolation, extrapolationFactor);
 };
 
 // --- CORE INTERPOLATION ENGINE ---
+
+export interface InterpolationOvershootOptions {
+  exaggerationEnabled?: boolean;
+  exaggerationFactor?: number; // e.g. 1.25 -> 25% exaggeration from centroid/neutral pose
+  neutralKeyframeIndex?: number;
+}
 
 export const interpolateStrokePoints = (
   strokeId: string,
   basePoints: Point[], 
   keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number, cornerRoundness: number }[],
   mode: 'resample' | 'points' | 'spline' | 'length' = 'resample',
-  targetCount: number = 200 
+  targetCount: number = 200,
+  overshootOptions?: InterpolationOvershootOptions
 ): { points: Point[], color: string, fillColor: string, width: number, cornerRoundness: number } => {
   
-  // 1. Filter active keyframes
-  const activeKeyframes = keyframesData.filter(k => k.weight > 0.0001 && k.points && k.points.length > 0);
+  // 1. Filter active keyframes (weights can be negative or > 1 in extrapolation mode)
+  const activeKeyframes = keyframesData.filter(k => Math.abs(k.weight) > 0.0001 && k.points && k.points.length > 0);
   if (activeKeyframes.length === 0) return { points: [], color: 'rgba(0,0,0,0)', fillColor: 'none', width: 1, cornerRoundness: 0 };
 
-  // 2. Mix Properties
-  const color = mixColors(activeKeyframes.map(k => ({ color: k.color, weight: k.weight })));
-  const fillColor = mixColors(activeKeyframes.map(k => ({ color: k.fillColor, weight: k.weight })));
+  // 2. Mix Properties (Colors & Width clamped to non-negative)
+  const positiveKeyframes = activeKeyframes.filter(k => k.weight > 0.0001);
+  const colorKeyframes = positiveKeyframes.length > 0 ? positiveKeyframes : activeKeyframes;
+  const color = mixColors(colorKeyframes.map(k => ({ color: k.color, weight: Math.max(0.001, k.weight) })));
+  const fillColor = mixColors(colorKeyframes.map(k => ({ color: k.fillColor, weight: Math.max(0.001, k.weight) })));
   
   let totalWidth = 0;
   let totalCornerRoundness = 0;
   let widthWeightDivisor = 0;
   activeKeyframes.forEach(k => {
-      totalWidth += k.width * k.weight;
-      totalCornerRoundness += k.cornerRoundness * k.weight;
-      widthWeightDivisor += k.weight;
+      const w = Math.max(0, k.weight);
+      totalWidth += k.width * w;
+      totalCornerRoundness += k.cornerRoundness * w;
+      widthWeightDivisor += w;
   });
   const width = widthWeightDivisor > 0 ? totalWidth / widthWeightDivisor : 1;
   const cornerRoundness = widthWeightDivisor > 0 ? totalCornerRoundness / widthWeightDivisor : 0;
@@ -455,16 +511,34 @@ export const interpolateStrokePoints = (
 
           x += pt.x * kf.weight;
           y += pt.y * kf.weight;
-          pressure += (pt.pressure || 0.5) * kf.weight;
+          pressure += (pt.pressure || 0.5) * Math.max(0, kf.weight);
           totalWeight += kf.weight;
       }
 
-      if (totalWeight > 0) {
+      if (Math.abs(totalWeight) > 0.0001) {
           resultPoints.push({
               x: x / totalWeight,
               y: y / totalWeight,
-              pressure: pressure / totalWeight
+              pressure: pressure / (activeKeyframes.reduce((sum, k) => sum + Math.max(0, k.weight), 0) || 1)
           });
+      }
+  }
+
+  // Option C (Geometric Overshoot): Exaggeration / Shape Extrusion
+  if (overshootOptions?.exaggerationEnabled && overshootOptions.exaggerationFactor && overshootOptions.exaggerationFactor !== 1.0 && resultPoints.length > 0) {
+      const factor = overshootOptions.exaggerationFactor;
+      // Calculate geometric centroid of current interpolated stroke
+      let cX = 0, cY = 0;
+      for (const p of resultPoints) {
+          cX += p.x;
+          cY += p.y;
+      }
+      cX /= resultPoints.length;
+      cY /= resultPoints.length;
+
+      for (let i = 0; i < resultPoints.length; i++) {
+          resultPoints[i].x = cX + (resultPoints[i].x - cX) * factor;
+          resultPoints[i].y = cY + (resultPoints[i].y - cY) * factor;
       }
   }
 

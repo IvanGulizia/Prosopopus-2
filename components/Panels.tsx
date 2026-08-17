@@ -316,6 +316,9 @@ export const SettingsPanel: React.FC = () => {
       toggleOvershootBounciness, setOvershootBounciness,
       toggleOvershootRubberband, setOvershootRubberbandFactor,
       toggleOvershootMomentum, setOvershootMomentumFactor,
+      toggleOvershootExtrapolation, setOvershootExtrapolationFactor,
+      toggleOvershootVertexInertia, setOvershootVertexInertiaFactor, setOvershootVertexDamping,
+      toggleOvershootExaggeration, setOvershootExaggerationFactor,
       setLayerCornerRoundness, setStrokeCap,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
       updateCanvasSize, renameProject, setStrokeResolution,
@@ -391,6 +394,13 @@ export const SettingsPanel: React.FC = () => {
               overshootRubberbandFactor: ui.overshootRubberbandFactor,
               overshootMomentumEnabled: ui.overshootMomentumEnabled,
               overshootMomentumFactor: ui.overshootMomentumFactor,
+              overshootExtrapolationEnabled: ui.overshootExtrapolationEnabled,
+              overshootExtrapolationFactor: ui.overshootExtrapolationFactor,
+              overshootVertexInertiaEnabled: ui.overshootVertexInertiaEnabled,
+              overshootVertexInertiaFactor: ui.overshootVertexInertiaFactor,
+              overshootVertexDamping: ui.overshootVertexDamping,
+              overshootExaggerationEnabled: ui.overshootExaggerationEnabled,
+              overshootExaggerationFactor: ui.overshootExaggerationFactor,
               strokeCap: ui.strokeCap,
               brushSize: ui.brushSize,
               brushColor: ui.brushColor,
@@ -1043,6 +1053,41 @@ export const SettingsPanel: React.FC = () => {
                                     {ui.overshootMomentumEnabled && (
                                         <SettingsRow label="Impulse Extrapolation" value={`${Math.round((ui.overshootMomentumFactor ?? 0.4) * 100)}%`}>
                                             <input type="range" min="0.1" max="1" step="0.05" value={ui.overshootMomentumFactor ?? 0.4} onChange={(e) => setOvershootMomentumFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                        </SettingsRow>
+                                    )}
+                                </div>
+
+                                {/* Solution A: Linear State Geometric Extrapolation */}
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                    <SettingsToggle label="A. Geometric Extrapolation (Weights > 1)" active={ui.overshootExtrapolationEnabled} onClick={toggleOvershootExtrapolation} />
+                                    {ui.overshootExtrapolationEnabled && (
+                                        <SettingsRow label="Extrapolation Range" value={`${Math.round((ui.overshootExtrapolationFactor ?? 0.2) * 100)}%`}>
+                                            <input type="range" min="0.05" max="0.8" step="0.05" value={ui.overshootExtrapolationFactor ?? 0.2} onChange={(e) => setOvershootExtrapolationFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                        </SettingsRow>
+                                    )}
+                                </div>
+
+                                {/* Solution B: Vertex Inertial Velocity (Follow-Through) */}
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                    <SettingsToggle label="B. Vertex Inertia (Disney Follow-Through)" active={ui.overshootVertexInertiaEnabled} onClick={toggleOvershootVertexInertia} />
+                                    {ui.overshootVertexInertiaEnabled && (
+                                        <>
+                                            <SettingsRow label="Point Elasticity" value={`${Math.round((ui.overshootVertexInertiaFactor ?? 0.4) * 100)}%`}>
+                                                <input type="range" min="0.05" max="1" step="0.05" value={ui.overshootVertexInertiaFactor ?? 0.4} onChange={(e) => setOvershootVertexInertiaFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                            </SettingsRow>
+                                            <SettingsRow label="Vertex Damping" value={`${Math.round((ui.overshootVertexDamping ?? 0.85) * 100)}%`}>
+                                                <input type="range" min="0.5" max="0.98" step="0.02" value={ui.overshootVertexDamping ?? 0.85} onChange={(e) => setOvershootVertexDamping(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                            </SettingsRow>
+                                        </>
+                                    )}
+                                </div>
+
+                                {/* Solution C: Keyframe Exaggeration / Overdrive */}
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                    <SettingsToggle label="C. Shape Exaggeration (Overdrive)" active={ui.overshootExaggerationEnabled} onClick={toggleOvershootExaggeration} />
+                                    {ui.overshootExaggerationEnabled && (
+                                        <SettingsRow label="Exaggeration Factor" value={`x${(ui.overshootExaggerationFactor ?? 1.25).toFixed(2)}`}>
+                                            <input type="range" min="1.0" max="2.0" step="0.05" value={ui.overshootExaggerationFactor ?? 1.25} onChange={(e) => setOvershootExaggerationFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                                         </SettingsRow>
                                     )}
                                 </div>

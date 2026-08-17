@@ -65,6 +65,15 @@ interface StoreState {
   toggleOvershootMomentum: () => void;
   setOvershootMomentumFactor: (val: number) => void;
 
+  // Geometric Overshoot Actions
+  toggleOvershootExtrapolation: () => void;
+  setOvershootExtrapolationFactor: (val: number) => void;
+  toggleOvershootVertexInertia: () => void;
+  setOvershootVertexInertiaFactor: (val: number) => void;
+  setOvershootVertexDamping: (val: number) => void;
+  toggleOvershootExaggeration: () => void;
+  setOvershootExaggerationFactor: (val: number) => void;
+
   setGridSize: (size: number) => void;
   toggleSmoothing: () => void; // Renamed from toggleSimplifyStrokes
   
@@ -633,6 +642,15 @@ export const useStore = create<StoreState>((set, get) => ({
   setOvershootRubberbandFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootRubberbandFactor: val } })),
   toggleOvershootMomentum: () => set((state) => ({ ui: { ...state.ui, overshootMomentumEnabled: !state.ui.overshootMomentumEnabled } })),
   setOvershootMomentumFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootMomentumFactor: val } })),
+
+  // Geometric Overshoot Implementations
+  toggleOvershootExtrapolation: () => set((state) => ({ ui: { ...state.ui, overshootExtrapolationEnabled: !state.ui.overshootExtrapolationEnabled } })),
+  setOvershootExtrapolationFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootExtrapolationFactor: val } })),
+  toggleOvershootVertexInertia: () => set((state) => ({ ui: { ...state.ui, overshootVertexInertiaEnabled: !state.ui.overshootVertexInertiaEnabled } })),
+  setOvershootVertexInertiaFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexInertiaFactor: val } })),
+  setOvershootVertexDamping: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexDamping: val } })),
+  toggleOvershootExaggeration: () => set((state) => ({ ui: { ...state.ui, overshootExaggerationEnabled: !state.ui.overshootExaggerationEnabled } })),
+  setOvershootExaggerationFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootExaggerationFactor: val } })),
 
   setGridSize: (size) => set((state) => ({ ui: { ...state.ui, gridSize: size } })),
   toggleSmoothing: () => set((state) => ({ ui: { ...state.ui, smoothingEnabled: !state.ui.smoothingEnabled } })),

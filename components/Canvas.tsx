@@ -36,6 +36,9 @@ export const Canvas: React.FC = () => {
   // Play Mode Local Physics State (Decoupled from Store)
   const playModeAxesRef = useRef<Record<string, number>>({ 'axis-x': 0.5, 'axis-y': 0.5 });
 
+  // Vertex Inertia Dynamics (Disney Follow-Through / Jiggle - Approach B)
+  const vertexInertiaRef = useRef<Map<string, { current: Point[], velocity: Point[] }>>(new Map());
+
   const lastFrameTimeRef = useRef<number>(0);
   
   // -- Interaction State (Refs needed for Loop access without stale closure) --
@@ -960,11 +963,21 @@ export const Canvas: React.FC = () => {
 
         if (layerRelevantKeyframes.length === 0) return;
 
-        const weights = calculateInterpolationWeights(currentAxesDict, layerRelevantKeyframes, currentUI.interpolationExponent, currentUI.interpolationStrategy);
+        const allowExtrapolation = currentUI.overshootExtrapolationEnabled ?? true;
+        const extrapolationFactor = currentUI.overshootExtrapolationFactor ?? 0.2;
+
+        const weights = calculateInterpolationWeights(
+            currentAxesDict, 
+            layerRelevantKeyframes, 
+            currentUI.interpolationExponent, 
+            currentUI.interpolationStrategy,
+            allowExtrapolation,
+            extrapolationFactor
+        );
 
         const activeKeyframes = layerRelevantKeyframes
              .map(k => ({ ...k, weight: weights[k.id] || 0 }))
-             .filter(k => k.weight > 0.0001);
+             .filter(k => Math.abs(k.weight) > 0.0001);
 
         const strokeId = `stroke-${layer.id}-unique`;
 
@@ -1016,8 +1029,48 @@ export const Canvas: React.FC = () => {
             primaryStroke.points, 
             strokeData, 
             layer.interpolationMode,
-            interpolationTargetCount 
+            interpolationTargetCount,
+            {
+                exaggerationEnabled: currentUI.overshootExaggerationEnabled,
+                exaggerationFactor: currentUI.overshootExaggerationFactor ?? 1.25
+            }
         );
+
+        // Approach B: Dynamic Vertex Inertial Velocity / Jiggle (Disney Follow-Through)
+        if (currentUI.overshootVertexInertiaEnabled && interpolatedPoints.length > 0 && currentUI.mode === 'play') {
+            const inertiaFactor = (currentUI.overshootVertexInertiaFactor ?? 0.4) * 25.0;
+            const vertexDamping = currentUI.overshootVertexDamping ?? 0.85;
+            const inertiaKey = `layer-${layer.id}`;
+            let stored = vertexInertiaRef.current.get(inertiaKey);
+
+            if (!stored || stored.current.length !== interpolatedPoints.length) {
+                stored = {
+                    current: interpolatedPoints.map(p => ({ ...p })),
+                    velocity: interpolatedPoints.map(() => ({ x: 0, y: 0 }))
+                };
+                vertexInertiaRef.current.set(inertiaKey, stored);
+            } else {
+                for (let i = 0; i < interpolatedPoints.length; i++) {
+                    const targetPt = interpolatedPoints[i];
+                    const curPt = stored.current[i];
+                    const vel = stored.velocity[i];
+
+                    // Spring towards interpolated target point
+                    const springF_x = (targetPt.x - curPt.x) * inertiaFactor;
+                    const springF_y = (targetPt.y - curPt.y) * inertiaFactor;
+
+                    vel.x = (vel.x + springF_x * dt) * vertexDamping;
+                    vel.y = (vel.y + springF_y * dt) * vertexDamping;
+
+                    curPt.x += vel.x * dt;
+                    curPt.y += vel.y * dt;
+                    curPt.pressure = targetPt.pressure;
+                }
+                interpolatedPoints = stored.current.map(p => ({ ...p }));
+            }
+        } else if (currentUI.mode !== 'play') {
+            vertexInertiaRef.current.clear();
+        }
 
         if (isInactiveWireframe) {
           interpolatedFill = 'none';

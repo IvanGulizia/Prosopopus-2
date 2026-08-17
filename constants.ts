@@ -112,24 +112,25 @@ export const INITIAL_UI_STATE: UIState = {
   interpolationExponent: 2.0, // Default for IDW mode if switched
   
   playModePhysics: true, // DEFAULT ENABLED
-  springStiffness: 250, // High stiffness = Fast response
-  springDamping: 15,    // Base damping
+  springStiffness: 220, // Updated default: 220
+  springDamping: 40,    // Updated default: 40
   
-  // Overshoot initial defaults (Cursor / Matrix Level)
-  overshootBouncinessEnabled: false,
-  overshootBounciness: 0.5,
-  overshootRubberbandEnabled: true,
+  // Overshoot initial defaults
+  overshootBouncinessEnabled: true, // 1. Physical spring bounciness enabled by default
+  overshootBounciness: 0.5,         // 50%
+  overshootRubberbandEnabled: false, // 2. Border rubber-banding disabled by default
   overshootRubberbandFactor: 0.35,
   overshootMomentumEnabled: false,
   overshootMomentumFactor: 0.4,
 
-  // Geometric / Interpolated Shape Overshoot defaults (Vertex Level)
-  shapeExtrapolationLinearEnabled: false,
-  shapeExtrapolationLinearFactor: 0.35,
-  shapeExtrapolationInertiaEnabled: false,
-  shapeExtrapolationInertiaFactor: 0.4,
-  shapeExtrapolationOverdriveEnabled: false,
-  shapeExtrapolationOverdriveFactor: 0.3,
+  // Geometric Overshoot initial defaults
+  overshootExtrapolationEnabled: true, // A. Geometric extrapolation enabled by default
+  overshootExtrapolationFactor: 0.2,   // 20%
+  overshootVertexInertiaEnabled: false,
+  overshootVertexInertiaFactor: 0.4,
+  overshootVertexDamping: 0.85,
+  overshootExaggerationEnabled: false,
+  overshootExaggerationFactor: 1.25,
 
   gridSize: 40, 
   
@@ -157,7 +158,7 @@ export const INITIAL_UI_STATE: UIState = {
   symmetryAxisX: 300,
   symmetryAxisY: 300,
   symmetryRadialCount: 4,
-  symmetryTarget: 'merge',
+  symmetryTarget: 'layer', // Default: Dynamic Mirror (instead of Unified Contour)
   showSymmetryAxis: true,
 
   resolutionScale: 1.5, // Crisp default without killing FPS (Retina is usually 2 or 3)
