@@ -594,7 +594,8 @@ export const Canvas: React.FC = () => {
 
     if (ui.selectedTool === 'pen') {
       setInteractionMode('drawing'); 
-      currentPointsRef.current = [getSnappedPoint(p)];
+      const startPt = ui.snapToGrid ? getSnappedPoint(p) : p;
+      currentPointsRef.current = [startPt];
       (e.target as Element).setPointerCapture(e.pointerId);
     } 
   };
@@ -839,7 +840,11 @@ export const Canvas: React.FC = () => {
     }
 
     if (interactionModeRef.current === 'drawing') {
-        currentPointsRef.current.push(getSnappedPoint(p));
+        const pt = ui.snapToGrid ? getSnappedPoint(p) : p;
+        const pts = currentPointsRef.current;
+        if (pts.length === 0 || distance(pt, pts[pts.length - 1]) > 0.1) {
+            pts.push(pt);
+        }
     }
   };
 
@@ -1126,10 +1131,15 @@ export const Canvas: React.FC = () => {
            if (kf.id === currentUI.selectedKeyframeId) return; 
            
            kf.layerStates.forEach(ls => {
-              if (ls.layerId !== currentUI.selectedLayerId) return;
+              const targetLayer = currentProject.layers.find(l => l.id === ls.layerId);
+              if (!targetLayer || !targetLayer.visible) return;
+
+              const isLayerActive = targetLayer.id === currentUI.selectedLayerId;
+              if (!isLayerActive && currentUI.inactiveLayerMode === 'hidden') return;
+
+              const inactiveMultiplier = isLayerActive ? 1.0 : (currentUI.inactiveLayerOpacity ?? 0.35);
               const stroke = ls.strokes[0];
               if (stroke && stroke.points.length > 1) {
-                const targetLayer = currentProject.layers.find(l => l.id === ls.layerId);
                 const isSpline = targetLayer?.interpolationMode === 'spline';
                 const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
                 const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
@@ -1176,7 +1186,7 @@ export const Canvas: React.FC = () => {
                   // 1. Translucent Styled representation
                   if (onionMode === 'styled' || onionMode === 'both') {
                     ctx.save();
-                    ctx.globalAlpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1);
+                    ctx.globalAlpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1) * inactiveMultiplier;
                     renderPath();
                     if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
                       ctx.fillStyle = resolvedStyle.fillColor;
@@ -1192,12 +1202,12 @@ export const Canvas: React.FC = () => {
                     ctx.restore();
                   }
 
-                  // 2. Wireframe Thin Blue line
+                  // 2. Wireframe Thin line
                   if (onionMode === 'wireframe' || onionMode === 'both') {
                     ctx.save();
-                    ctx.globalAlpha = Math.min(1.0, currentUI.onionSkinOpacity * 2.5 + 0.2);
+                    ctx.globalAlpha = Math.min(1.0, (currentUI.onionSkinOpacity * 2.5 + 0.2) * inactiveMultiplier);
                     renderPath();
-                    ctx.strokeStyle = '#3B82F6';
+                    ctx.strokeStyle = isLayerActive ? '#3B82F6' : '#64748B';
                     ctx.lineWidth = 1;
                     ctx.setLineDash([]);
                     ctx.stroke();
@@ -1228,13 +1238,14 @@ export const Canvas: React.FC = () => {
 
         if (layerRelevantKeyframes.length === 0) return;
 
-        // In Edit Mode with a selected keyframe, only render the layer if this keyframe actually has strokes for this layer
-        if (currentUI.mode === 'edit' && currentUI.selectedKeyframeId) {
+        // In Edit Mode with a selected keyframe:
+        // For the ACTIVE layer, if this keyframe does NOT have a stroke yet (an unkeyed/empty state on this layer),
+        // do not render a phantom solid stroke for it. (Other layers remain visible in their inactive transparency mode).
+        if (isLayerActive && currentUI.mode === 'edit' && currentUI.selectedKeyframeId) {
             const currentKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
             const currentLayerState = currentKf?.layerStates.find(s => s.layerId === layer.id);
             const hasStrokeInCurrentKf = (currentLayerState?.strokes.length || 0) > 0;
             if (!hasStrokeInCurrentKf) {
-                // This state does not have content for this layer. Do not render ghost/interpolated shapes from other states!
                 return;
             }
         }
@@ -1314,8 +1325,9 @@ export const Canvas: React.FC = () => {
 
         // Approach B: Dynamic Vertex Inertial Velocity / Jiggle (Disney Follow-Through)
         if (currentUI.overshootVertexInertiaEnabled && interpolatedPoints.length > 0 && currentUI.mode === 'play') {
-            const inertiaFactor = (currentUI.overshootVertexInertiaFactor ?? 0.4) * 25.0;
-            const vertexDamping = currentUI.overshootVertexDamping ?? 0.85;
+            const stiffness = (currentUI.overshootVertexInertiaFactor ?? 0.6) * 120.0;
+            const damping = (currentUI.overshootVertexDamping ?? 0.75) * 35.0;
+            const mass = Math.max(0.1, currentUI.overshootVertexMass ?? 1.0);
             const inertiaKey = `layer-${layer.id}`;
             let stored = vertexInertiaRef.current.get(inertiaKey);
 
@@ -1326,21 +1338,26 @@ export const Canvas: React.FC = () => {
                 };
                 vertexInertiaRef.current.set(inertiaKey, stored);
             } else {
-                for (let i = 0; i < interpolatedPoints.length; i++) {
-                    const targetPt = interpolatedPoints[i];
-                    const curPt = stored.current[i];
-                    const vel = stored.velocity[i];
+                const subSteps = 2;
+                const subDt = Math.min(dt, 0.05) / subSteps;
 
-                    // Spring towards interpolated target point
-                    const springF_x = (targetPt.x - curPt.x) * inertiaFactor;
-                    const springF_y = (targetPt.y - curPt.y) * inertiaFactor;
+                for (let step = 0; step < subSteps; step++) {
+                    for (let i = 0; i < interpolatedPoints.length; i++) {
+                        const targetPt = interpolatedPoints[i];
+                        const curPt = stored.current[i];
+                        const vel = stored.velocity[i];
 
-                    vel.x = (vel.x + springF_x * dt) * vertexDamping;
-                    vel.y = (vel.y + springF_y * dt) * vertexDamping;
+                        // Second-order Spring-Damper-Mass Force: F = k*(target - cur) - c*vel
+                        const springF_x = (targetPt.x - curPt.x) * stiffness - vel.x * damping;
+                        const springF_y = (targetPt.y - curPt.y) * stiffness - vel.y * damping;
 
-                    curPt.x += vel.x * dt;
-                    curPt.y += vel.y * dt;
-                    curPt.pressure = targetPt.pressure;
+                        vel.x += (springF_x / mass) * subDt;
+                        vel.y += (springF_y / mass) * subDt;
+
+                        curPt.x += vel.x * subDt;
+                        curPt.y += vel.y * subDt;
+                        curPt.pressure = targetPt.pressure;
+                    }
                 }
                 interpolatedPoints = stored.current.map(p => ({ ...p }));
             }
@@ -1375,11 +1392,11 @@ export const Canvas: React.FC = () => {
             allInterpolatedPaths.forEach(pathPts => {
               if (pathPts.length === 0) return;
 
-              const isQuadShape = pathPts.length === 4 || pathPts.length === 5;
+              const isRectangleShape = primaryStroke?.shapeConfig?.type === 'rectangle';
 
               if (layer.interpolationMode === 'spline') {
                   drawCatmullRomSpline(ctx, pathPts, 0.5); 
-              } else if (isQuadShape && (interpolatedCornerRadii || interpolatedCornerRoundness > 0)) {
+              } else if (isRectangleShape && (interpolatedCornerRadii || interpolatedCornerRoundness > 0)) {
                   drawRoundedRectangle(ctx, pathPts, interpolatedCornerRadii, interpolatedCornerRoundness);
               } else {
                   ctx.beginPath();

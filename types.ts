@@ -202,8 +202,9 @@ export interface UIState {
 
   // Approche B : Vertex Inertial Velocity / Dynamic Jiggle (Disney Follow-Through)
   overshootVertexInertiaEnabled: boolean;
-  overshootVertexInertiaFactor: number; // 0 to 1.0 (vertex velocity momentum force)
-  overshootVertexDamping: number;       // 0.5 to 0.98 (decay rate of vertex inertia)
+  overshootVertexInertiaFactor: number; // Tension / Reactivity (0.1 to 3.0)
+  overshootVertexDamping: number;       // Friction / Damping (0.05 to 1.5)
+  overshootVertexMass: number;          // Vertex Weight / Mass Lag (0.2 to 2.5)
 
   // Approche C : Keyframe Exaggeration / Overdrive Slider
   overshootExaggerationEnabled: boolean;

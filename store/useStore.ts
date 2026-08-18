@@ -71,6 +71,7 @@ interface StoreState {
   toggleOvershootVertexInertia: () => void;
   setOvershootVertexInertiaFactor: (val: number) => void;
   setOvershootVertexDamping: (val: number) => void;
+  setOvershootVertexMass: (val: number) => void;
   toggleOvershootExaggeration: () => void;
   setOvershootExaggerationFactor: (val: number) => void;
 
@@ -658,6 +659,7 @@ export const useStore = create<StoreState>((set, get) => ({
   toggleOvershootVertexInertia: () => set((state) => ({ ui: { ...state.ui, overshootVertexInertiaEnabled: !state.ui.overshootVertexInertiaEnabled } })),
   setOvershootVertexInertiaFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexInertiaFactor: val } })),
   setOvershootVertexDamping: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexDamping: val } })),
+  setOvershootVertexMass: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexMass: val } })),
   toggleOvershootExaggeration: () => set((state) => ({ ui: { ...state.ui, overshootExaggerationEnabled: !state.ui.overshootExaggerationEnabled } })),
   setOvershootExaggerationFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootExaggerationFactor: val } })),
 
@@ -1442,7 +1444,7 @@ export const useStore = create<StoreState>((set, get) => ({
     let shouldUpdateLayerMode = false;
 
     // --- GRID OPTIMIZATION ---
-    if (snapToGrid && state.ui.selectedTool !== 'polyline') {
+    if (snapToGrid) {
         points = simplifyCollinearPoints(rawPoints, 0.1);
         if (layer.interpolationMode === 'resample') {
             shouldUpdateLayerMode = true;

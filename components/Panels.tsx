@@ -268,11 +268,11 @@ const SettingsSection = ({ title, children, isOpen, onToggle, theme }: { title: 
                 style={{ color: theme.textMuted }}
             />
         </button>
-        <div className={`transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[1000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-            <div className="p-4 space-y-4 border-t" style={{ borderColor: theme.border }}>
+        {isOpen && (
+            <div className="p-4 space-y-4 border-t transition-opacity duration-200 animate-in fade-in" style={{ borderColor: theme.border }}>
                 {children}
             </div>
-        </div>
+        )}
     </div>
   );
 
@@ -317,7 +317,7 @@ export const SettingsPanel: React.FC = () => {
       toggleOvershootRubberband, setOvershootRubberbandFactor,
       toggleOvershootMomentum, setOvershootMomentumFactor,
       toggleOvershootExtrapolation, setOvershootExtrapolationFactor,
-      toggleOvershootVertexInertia, setOvershootVertexInertiaFactor, setOvershootVertexDamping,
+      toggleOvershootVertexInertia, setOvershootVertexInertiaFactor, setOvershootVertexDamping, setOvershootVertexMass,
       toggleOvershootExaggeration, setOvershootExaggerationFactor,
       setLayerCornerRoundness, setStrokeCap,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
@@ -402,6 +402,7 @@ export const SettingsPanel: React.FC = () => {
               overshootVertexInertiaEnabled: ui.overshootVertexInertiaEnabled,
               overshootVertexInertiaFactor: ui.overshootVertexInertiaFactor,
               overshootVertexDamping: ui.overshootVertexDamping,
+              overshootVertexMass: ui.overshootVertexMass,
               overshootExaggerationEnabled: ui.overshootExaggerationEnabled,
               overshootExaggerationFactor: ui.overshootExaggerationFactor,
               strokeCap: ui.strokeCap,
@@ -448,11 +449,11 @@ export const SettingsPanel: React.FC = () => {
   return (
     <div 
       onClick={(e) => e.stopPropagation()}
-      className="absolute top-28 right-6 w-96 backdrop-blur-2xl rounded-3xl shadow-2xl border z-50 flex flex-col max-h-[75vh] pointer-events-auto overflow-hidden animate-in fade-in slide-in-from-top-4 duration-300"
+      className="absolute top-20 right-6 w-96 backdrop-blur-2xl rounded-3xl shadow-2xl border z-50 flex flex-col max-h-[calc(100vh-6rem)] pointer-events-auto overflow-hidden animate-in fade-in slide-in-from-top-4 duration-300"
       style={{ backgroundColor: `${theme.bgPanel}EE`, borderColor: theme.border, color: theme.textMain }}
     >
       {/* Header */}
-      <div className="flex justify-between items-center p-6 border-b sticky top-0 z-10" style={{ borderColor: theme.border, backgroundColor: `${theme.bgPanel}CC` }}>
+      <div className="flex justify-between items-center p-6 border-b shrink-0 z-10" style={{ borderColor: theme.border, backgroundColor: `${theme.bgPanel}CC` }}>
         <div>
             <h3 className="font-bold text-lg">Settings</h3>
             <p className="text-xs mt-0.5" style={{ color: theme.textMuted }}>Global configuration</p>
@@ -466,7 +467,7 @@ export const SettingsPanel: React.FC = () => {
         </button>
       </div>
 
-      <div className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
+      <div className="p-6 pb-12 space-y-4 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
         
         {/* SECTION: LAYER GLOBAL STYLES */}
         <SettingsSection 
@@ -1134,17 +1135,57 @@ export const SettingsPanel: React.FC = () => {
                                 </div>
 
                                 {/* Solution B: Vertex Inertial Velocity (Follow-Through) */}
-                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2">
+                                <div className="bg-white/70 rounded-lg p-2.5 border border-blue-100/80 space-y-2.5">
                                     <SettingsToggle label="B. Vertex Inertia (Disney Follow-Through)" active={ui.overshootVertexInertiaEnabled} onClick={toggleOvershootVertexInertia} />
                                     {ui.overshootVertexInertiaEnabled && (
-                                        <>
-                                            <SettingsRow label="Point Elasticity" value={`${Math.round((ui.overshootVertexInertiaFactor ?? 0.4) * 100)}%`}>
-                                                <input type="range" min="0.05" max="1" step="0.05" value={ui.overshootVertexInertiaFactor ?? 0.4} onChange={(e) => setOvershootVertexInertiaFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                        <div className="space-y-2 pt-1 border-t border-blue-100/60">
+                                            {/* Quick Tuning Presets */}
+                                            <div className="flex gap-1">
+                                                <button 
+                                                    onClick={() => {
+                                                        setOvershootVertexInertiaFactor(2.5);
+                                                        setOvershootVertexDamping(0.5);
+                                                        setOvershootVertexMass(2.0);
+                                                    }} 
+                                                    className="flex-1 py-1 text-[10px] font-bold rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors border border-blue-200/50"
+                                                    title="Default high reactivity (x2.5), friction (x0.5), weight (x2.0)"
+                                                >
+                                                    Default (Balanced)
+                                                </button>
+                                                <button 
+                                                    onClick={() => {
+                                                        setOvershootVertexInertiaFactor(2.8);
+                                                        setOvershootVertexDamping(1.3);
+                                                        setOvershootVertexMass(0.6);
+                                                    }} 
+                                                    className="flex-1 py-1 text-[10px] font-bold rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors border border-blue-200/50"
+                                                    title="Very fast response with zero lingering bounce"
+                                                >
+                                                    Snappy & Crisp
+                                                </button>
+                                                <button 
+                                                    onClick={() => {
+                                                        setOvershootVertexInertiaFactor(0.8);
+                                                        setOvershootVertexDamping(0.35);
+                                                        setOvershootVertexMass(1.0);
+                                                    }} 
+                                                    className="flex-1 py-1 text-[10px] font-bold rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors border border-blue-200/50"
+                                                    title="Soft elastic jelly with oscillation"
+                                                >
+                                                    Elastic Jelly
+                                                </button>
+                                            </div>
+
+                                            <SettingsRow label="Reactivity / Tension (Stiffness)" value={`x${(ui.overshootVertexInertiaFactor ?? 2.5).toFixed(2)}`}>
+                                                <input type="range" min="0.1" max="3.0" step="0.05" value={ui.overshootVertexInertiaFactor ?? 2.5} onChange={(e) => setOvershootVertexInertiaFactor(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                                             </SettingsRow>
-                                            <SettingsRow label="Vertex Damping" value={`${Math.round((ui.overshootVertexDamping ?? 0.85) * 100)}%`}>
-                                                <input type="range" min="0.5" max="0.98" step="0.02" value={ui.overshootVertexDamping ?? 0.85} onChange={(e) => setOvershootVertexDamping(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                            <SettingsRow label="Friction / Settling (Damping)" value={`x${(ui.overshootVertexDamping ?? 0.5).toFixed(2)}`}>
+                                                <input type="range" min="0.05" max="1.5" step="0.05" value={ui.overshootVertexDamping ?? 0.5} onChange={(e) => setOvershootVertexDamping(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                                             </SettingsRow>
-                                        </>
+                                            <SettingsRow label="Weight / Inertial Lag (Mass)" value={`x${(ui.overshootVertexMass ?? 2.0).toFixed(2)}`}>
+                                                <input type="range" min="0.2" max="2.5" step="0.05" value={ui.overshootVertexMass ?? 2.0} onChange={(e) => setOvershootVertexMass(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                            </SettingsRow>
+                                        </div>
                                     )}
                                 </div>
 

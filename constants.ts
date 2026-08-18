@@ -116,7 +116,7 @@ export const INITIAL_UI_STATE: UIState = {
   springDamping: 40,    // Updated default: 40
   
   // Overshoot initial defaults
-  overshootBouncinessEnabled: true, // 1. Physical spring bounciness enabled by default
+  overshootBouncinessEnabled: false, // 1. Physical spring bounciness disabled by default
   overshootBounciness: 0.5,         // 50%
   overshootRubberbandEnabled: false, // 2. Border rubber-banding disabled by default
   overshootRubberbandFactor: 0.35,
@@ -126,9 +126,10 @@ export const INITIAL_UI_STATE: UIState = {
   // Geometric Overshoot initial defaults
   overshootExtrapolationEnabled: true, // A. Geometric extrapolation enabled by default
   overshootExtrapolationFactor: 0.2,   // 20%
-  overshootVertexInertiaEnabled: false,
-  overshootVertexInertiaFactor: 0.4,
-  overshootVertexDamping: 0.85,
+  overshootVertexInertiaEnabled: true, // B. Vertex Inertia enabled by default
+  overshootVertexInertiaFactor: 2.5,  // Stiffness / Tension (default x2.50)
+  overshootVertexDamping: 0.5,        // Damping / Friction (default x0.50 as requested)
+  overshootVertexMass: 2.0,           // Mass / Weight Lag (default x2.00)
   overshootExaggerationEnabled: false,
   overshootExaggerationFactor: 1.25,
 
@@ -136,10 +137,10 @@ export const INITIAL_UI_STATE: UIState = {
   
   smoothingEnabled: true, // Smoothing toggle
   strokeSmoothingFactor: 0.2, // 0 to 1 (0 = Raw/Detailed points, 1 = Heavy smoothing)
-  onionSkinEnabled: false,
-  onionSkinOpacity: 0.15,
+  onionSkinEnabled: true, // Enabled by default as requested
+  onionSkinOpacity: 0.2,
   onionSkinMode: 'both',
-  inactiveLayerOpacity: 0.3,
+  inactiveLayerOpacity: 0.35,
   inactiveLayerMode: 'dimmed',
 
   ghostStrokeOpacity: 0.4,
