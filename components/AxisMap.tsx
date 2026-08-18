@@ -58,8 +58,12 @@ export const AxisMap: React.FC = () => {
       // Coordinates are 0-1
       const HIT_TOLERANCE = 0.05; // 5% of width
       
+      const validKeyframes = project.keyframes.filter(kf => 
+          kf.layerStates.some(ls => ls.strokes.length > 0) || project.keyframes.length === 1
+      );
+
       // Sort by distance to find closest top-most
-      const sorted = [...project.keyframes].map(kf => {
+      const sorted = validKeyframes.map(kf => {
           const kx = kf.axisValues[axisX.id] ?? 0.5;
           const ky = kf.axisValues[axisY.id] ?? 0.5;
           const dist = Math.sqrt(Math.pow(kx - x, 2) + Math.pow(ky - y, 2));
@@ -202,11 +206,11 @@ export const AxisMap: React.FC = () => {
                     <div className="w-px h-3 bg-gray-200 mx-1"></div>
 
                     {/* DELETE */}
-                    {project.keyframes.length > 1 && (
+                    {(selectedKf.layerStates.some(ls => ls.layerId === ui.selectedLayerId && ls.strokes.length > 0) || project.keyframes.length > 1) && (
                         <button 
-                        onClick={() => deleteKeyframe(selectedKf.id)}
+                        onClick={() => deleteKeyframe(selectedKf.id, ui.selectedLayerId || undefined)}
                         className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1 rounded transition-colors"
-                        title="Delete State"
+                        title="Delete State on Current Layer"
                         >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
@@ -227,7 +231,9 @@ export const AxisMap: React.FC = () => {
           {gridLines}
 
           {/* Keyframes Dots */}
-          {project.keyframes.map(kf => {
+          {project.keyframes
+            .filter(kf => kf.layerStates.some(ls => ls.strokes.length > 0) || project.keyframes.length === 1)
+            .map(kf => {
             const kfX = kf.axisValues[axisX.id] ?? 0.5;
             const kfY = kf.axisValues[axisY.id] ?? 0.5;
             
@@ -256,9 +262,9 @@ export const AxisMap: React.FC = () => {
 
                   <div className={`rounded-full ${
                       hasDataForCurrentLayer
-                        ? 'w-2 h-2 bg-gray-800' 
+                        ? 'w-2.5 h-2.5 bg-gray-900 shadow-sm' 
                         : hasDataForAnyLayer
-                            ? 'w-2 h-2 bg-gray-300 border border-gray-300'
+                            ? 'w-2 h-2 bg-gray-400 border border-gray-400'
                             : 'w-2 h-2 border border-gray-300 bg-white' 
                   }`} />
               </div>

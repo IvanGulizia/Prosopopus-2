@@ -1,8 +1,8 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, CornerRadii, ShapeType, ShapeConfig } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME } from '../constants';
-import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour } from '../utils/math';
+import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour, generateShapePoints } from '../utils/math';
 
 interface StoreState {
   project: Project;
@@ -89,6 +89,14 @@ interface StoreState {
   setResolutionScale: (scale: number) => void;
   togglePerformanceMode: () => void;
   setStrokeResolution: (resolution: number) => void;
+  setStrokeSmoothingFactor: (factor: number) => void;
+  
+  // Shape & Corner Radii Actions
+  setShapeType: (type: ShapeType) => void;
+  setShapeSides: (sides: number) => void;
+  setCornerRadii: (radii: Partial<CornerRadii>) => void;
+  setCornerRadius: (corner: keyof CornerRadii | 'all', value: number) => void;
+  addOrUpdateShapeStroke: (config: ShapeConfig) => void;
   
   // Symmetry Actions
   toggleSymmetry: () => void;
@@ -121,11 +129,12 @@ interface StoreState {
   renameProject: (name: string) => void;
   
   addStrokeToCurrentKeyframe: (points: Point[], closed?: boolean, skipSimplify?: boolean) => void; 
-  updateStrokeInCurrentKeyframe: (strokeId: string, newPoints: Point[]) => void;
+  updateStrokeInCurrentKeyframe: (strokeId: string, newPoints: Point[], shapeConfig?: ShapeConfig) => void;
   deleteStroke: (strokeId: string) => void; 
   
   createKeyframeAtCurrentAxes: () => void;
-  deleteKeyframe: (keyframeId: string) => void;
+  deleteKeyframe: (keyframeId: string, targetLayerId?: string) => void;
+  deleteKeyframeStateForLayer: (keyframeId: string, layerId: string) => void;
   updateKeyframePosition: (keyframeId: string, x: number, y: number) => void; 
   splitKeyframeForLayer: (keyframeId: string, layerId: string) => string;
   selectKeyframe: (keyframeId: string) => void;
@@ -665,6 +674,166 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setResolutionScale: (scale) => set((state) => ({ ui: { ...state.ui, resolutionScale: scale } })),
   togglePerformanceMode: () => set((state) => ({ ui: { ...state.ui, performanceMode: !state.ui.performanceMode } })),
+  setStrokeSmoothingFactor: (factor) => set((state) => ({ ui: { ...state.ui, strokeSmoothingFactor: Math.max(0, Math.min(1, factor)) } })),
+  
+  // Shape & Corner Radii Actions
+  setShapeType: (type) => set((state) => ({ ui: { ...state.ui, shapeType: type } })),
+  setShapeSides: (sides) => set((state) => ({ ui: { ...state.ui, shapeSides: Math.max(3, Math.min(20, sides)) } })),
+  
+  setCornerRadii: (radii) => set((state) => {
+    const current = state.ui.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+    const updated = { ...current, ...radii };
+    const avg = Math.round((updated.topLeft + updated.topRight + updated.bottomRight + updated.bottomLeft) / 4);
+
+    let newKeyframes = state.project.keyframes;
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+      newKeyframes = state.project.keyframes.map(kf => {
+        if (kf.id !== state.ui.selectedKeyframeId) return kf;
+        return {
+          ...kf,
+          layerStates: kf.layerStates.map(ls => {
+            if (ls.layerId !== state.ui.selectedLayerId) return ls;
+            return {
+              ...ls,
+              strokes: ls.strokes.map(s => {
+                if (s.id !== state.ui.selectedStrokeId) return s;
+                return {
+                  ...s,
+                  style: { ...(s.style || {}), cornerRadii: updated },
+                  shapeConfig: s.shapeConfig ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig
+                };
+              })
+            };
+          })
+        };
+      });
+    }
+
+    return {
+      ui: { ...state.ui, cornerRadii: updated, cornerRoundness: avg },
+      project: { ...state.project, keyframes: newKeyframes }
+    };
+  }),
+
+  setCornerRadius: (corner, value) => set((state) => {
+    const v = Math.max(0, Math.min(200, value));
+    let updated: CornerRadii;
+    if (corner === 'all') {
+      updated = { topLeft: v, topRight: v, bottomRight: v, bottomLeft: v };
+    } else {
+      const current = state.ui.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+      updated = { ...current, [corner]: v };
+    }
+    const avg = Math.round((updated.topLeft + updated.topRight + updated.bottomRight + updated.bottomLeft) / 4);
+
+    let newKeyframes = state.project.keyframes;
+    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+      newKeyframes = state.project.keyframes.map(kf => {
+        if (kf.id !== state.ui.selectedKeyframeId) return kf;
+        return {
+          ...kf,
+          layerStates: kf.layerStates.map(ls => {
+            if (ls.layerId !== state.ui.selectedLayerId) return ls;
+            return {
+              ...ls,
+              strokes: ls.strokes.map(s => {
+                if (s.id !== state.ui.selectedStrokeId) return s;
+                return {
+                  ...s,
+                  style: { ...(s.style || {}), cornerRadii: updated },
+                  shapeConfig: s.shapeConfig ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig
+                };
+              })
+            };
+          })
+        };
+      });
+    }
+
+    return {
+      ui: { ...state.ui, cornerRadii: updated, cornerRoundness: avg },
+      project: { ...state.project, keyframes: newKeyframes }
+    };
+  }),
+
+  addOrUpdateShapeStroke: (config) => set((state) => {
+    const { selectedLayerId, brushColor, fillColor, brushSize, strokeResolution } = state.ui;
+    if (!selectedLayerId) return state;
+
+    const layer = state.project.layers.find(l => l.id === selectedLayerId);
+    if (layer?.locked || !layer?.visible) return state;
+
+    const targetPointsCount = strokeResolution || 400;
+    const points = generateShapePoints(config, targetPointsCount);
+    if (points.length === 0) return state;
+
+    const baseStyle = layer.baseStyle || { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid', cornerRoundness: 0, strokeResolution: 200 };
+    const styleOverride: Partial<StyleProps> = {};
+    if (brushColor !== baseStyle.strokeColor) styleOverride.strokeColor = brushColor as string;
+    if (fillColor !== baseStyle.fillColor) styleOverride.fillColor = fillColor;
+    if (brushSize !== baseStyle.strokeWidth) styleOverride.strokeWidth = brushSize;
+    if (config.cornerRadii) styleOverride.cornerRadii = config.cornerRadii;
+
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+    const currentAxisValues: Record<string, number> = {};
+    state.project.axes.forEach(a => currentAxisValues[a.id] = a.currentValue);
+
+    let targetKeyframeId = state.ui.selectedKeyframeId;
+    let keyframes = [...state.project.keyframes];
+    
+    if (targetKeyframeId === null) {
+      const newKfId = `kf-${Date.now()}`;
+      const newKeyframe: Keyframe = {
+        id: newKfId,
+        name: `Keyframe ${keyframes.length}`,
+        axisValues: currentAxisValues,
+        layerStates: [] 
+      };
+      keyframes.push(newKeyframe);
+      targetKeyframeId = newKfId;
+    }
+
+    const strokeId = `stroke-${selectedLayerId}-unique`;
+    const newStroke: Stroke = {
+      id: strokeId,
+      points,
+      closed: true,
+      style: Object.keys(styleOverride).length > 0 ? styleOverride : undefined,
+      shapeConfig: config
+    };
+
+    const newKeyframes = keyframes.map(kf => {
+      if (kf.id === targetKeyframeId) {
+        let newLayerStates = [...kf.layerStates].filter(ls => !ls.layerId.includes('-sym-'));
+        const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+        if (existingLayerStateIndex >= 0) {
+          newLayerStates[existingLayerStateIndex] = {
+            ...newLayerStates[existingLayerStateIndex],
+            strokes: [newStroke]
+          };
+        } else {
+          newLayerStates.push({
+            layerId: selectedLayerId,
+            strokes: [newStroke]
+          });
+        }
+        return { ...kf, layerStates: newLayerStates };
+      }
+      return kf;
+    });
+
+    return {
+      project: { ...state.project, keyframes: newKeyframes },
+      ui: { 
+        ...state.ui, 
+        selectedKeyframeId: targetKeyframeId,
+        selectedStrokeId: strokeId,
+        cornerRadii: config.cornerRadii || state.ui.cornerRadii
+      },
+      history: { past, future: [] }
+    };
+  }),
   
   // Symmetry Actions
   toggleSymmetry: () => set((state) => {
@@ -1255,10 +1424,26 @@ export const useStore = create<StoreState>((set, get) => ({
     }
     // --- STANDARD OPTIMIZATION ---
     else if (!skipSimplify && smoothingEnabled) { 
-       const preSimplified = simplifyPoints(rawPoints, 1.5);
-       points = chaikinSmooth(preSimplified, 2);
+       const factor = state.ui.strokeSmoothingFactor ?? 0.2;
+       if (factor <= 0.05) {
+           // Ultra-detailed / Raw: preserve virtually all sampled points
+           points = simplifyPoints(rawPoints, 0.25);
+       } else if (factor < 0.35) {
+           // Crisp / High detail: minimal simplification + 1 subtle Chaikin pass
+           const preSimplified = simplifyPoints(rawPoints, 0.6);
+           points = chaikinSmooth(preSimplified, 1);
+       } else if (factor < 0.7) {
+           // Balanced smoothing: standard curve rounding
+           const preSimplified = simplifyPoints(rawPoints, 1.2);
+           points = chaikinSmooth(preSimplified, 2);
+       } else {
+           // Strong smoothing: high curve rounding
+           const preSimplified = simplifyPoints(rawPoints, 2.0);
+           points = chaikinSmooth(preSimplified, 3);
+       }
     } else if (!skipSimplify && !smoothingEnabled) {
-       points = simplifyPoints(rawPoints, 1.5);
+       // Smoothing disabled: Raw points with minimal noise filter
+       points = simplifyPoints(rawPoints, 0.25);
     }
 
     // --- CLEANUP DUPLICATES ---
@@ -1357,7 +1542,7 @@ export const useStore = create<StoreState>((set, get) => ({
     };
   }),
 
-  updateStrokeInCurrentKeyframe: (strokeId, newPoints) => set((state) => {
+  updateStrokeInCurrentKeyframe: (strokeId, newPoints, shapeConfig) => set((state) => {
     const kfId = state.ui.selectedKeyframeId;
     if (!kfId) return state;
 
@@ -1367,7 +1552,16 @@ export const useStore = create<StoreState>((set, get) => ({
             if (ls.layerId === state.ui.selectedLayerId) {
                return {
                   ...ls,
-                  strokes: ls.strokes.map(s => ({ ...s, points: newPoints }))
+                  strokes: ls.strokes.map(s => {
+                     if (s.id === strokeId) {
+                        return {
+                           ...s,
+                           points: newPoints,
+                           shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig
+                        };
+                     }
+                     return s;
+                  })
                };
             }
             return ls;
@@ -1387,7 +1581,8 @@ export const useStore = create<StoreState>((set, get) => ({
 
      const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
 
-     const newKeyframes = state.project.keyframes.map(kf => {
+     // 1. Remove the stroke from the keyframe's layerState
+     let newKeyframes = state.project.keyframes.map(kf => {
          if (kf.id === kfId) {
              const newLayerStates = kf.layerStates.map(ls => {
                  if (ls.layerId === layerId) {
@@ -1397,15 +1592,42 @@ export const useStore = create<StoreState>((set, get) => ({
                      };
                  }
                  return ls;
-             });
+             }).filter(ls => ls.strokes.length > 0);
              return { ...kf, layerStates: newLayerStates };
          }
          return kf;
      });
 
+     // 2. Check if the target keyframe now has 0 strokes across ALL layers
+     const targetKf = newKeyframes.find(k => k.id === kfId);
+     const hasAnyStrokesLeft = targetKf?.layerStates.some(ls => ls.strokes.length > 0);
+
+     let newSelectedId = state.ui.selectedKeyframeId;
+     let newAxes = state.project.axes;
+
+     if (!hasAnyStrokesLeft && newKeyframes.length > 1) {
+         // Prune the now-empty keyframe so it doesn't leave ghost dots on the Matrix
+         newKeyframes = newKeyframes.filter(k => k.id !== kfId);
+         
+         const kfWithData = newKeyframes.find(k => 
+             k.layerStates.some(ls => ls.layerId === layerId && ls.strokes.length > 0)
+         ) || newKeyframes[0];
+         
+         newSelectedId = kfWithData?.id || null;
+
+         if (newSelectedId && kfWithData) {
+             newAxes = state.project.axes.map(a => {
+                 if (kfWithData.axisValues[a.id] !== undefined) {
+                     return { ...a, currentValue: kfWithData.axisValues[a.id] };
+                 }
+                 return a;
+             });
+         }
+     }
+
      return {
-         project: { ...state.project, keyframes: newKeyframes },
-         ui: { ...state.ui, selectedStrokeId: null }, // Clear selection
+         project: { ...state.project, keyframes: newKeyframes, axes: newAxes },
+         ui: { ...state.ui, selectedKeyframeId: newSelectedId, selectedStrokeId: null },
          history: { past, future: [] }
      };
   }),
@@ -1427,22 +1649,86 @@ export const useStore = create<StoreState>((set, get) => ({
       };
   }),
 
-  deleteKeyframe: (keyframeId) => set((state) => {
-    if (state.project.keyframes.length <= 1) return state; 
+  deleteKeyframe: (keyframeId, targetLayerId) => set((state) => {
+    const layerId = targetLayerId || state.ui.selectedLayerId;
+    const targetKf = state.project.keyframes.find(k => k.id === keyframeId);
+    if (!targetKf) return state;
+
     const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-    const newKeyframes = state.project.keyframes.filter(k => k.id !== keyframeId);
-    
+
+    // Check if other layers have strokes in this keyframe
+    const otherLayersHaveStrokes = targetKf.layerStates.some(
+        ls => (layerId ? ls.layerId !== layerId : false) && ls.strokes.length > 0
+    );
+
+    let newKeyframes: Keyframe[];
+
+    if (otherLayersHaveStrokes && layerId) {
+        // Only clear strokes for the specified layer, keep keyframe and other layers intact!
+        newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id === keyframeId) {
+                return {
+                    ...kf,
+                    layerStates: kf.layerStates.filter(ls => ls.layerId !== layerId)
+                };
+            }
+            return kf;
+        });
+    } else {
+        // No other layers have strokes in this keyframe
+        if (state.project.keyframes.length > 1) {
+            newKeyframes = state.project.keyframes.filter(k => k.id !== keyframeId);
+        } else {
+            // Keep the only remaining keyframe, but clear its strokes
+            newKeyframes = state.project.keyframes.map(kf => {
+                if (kf.id === keyframeId) {
+                    return { ...kf, layerStates: [] };
+                }
+                return kf;
+            });
+        }
+    }
+
+    // Determine next selected keyframe ID
     let newSelectedId = state.ui.selectedKeyframeId;
+    let newAxes = state.project.axes;
+
     if (keyframeId === newSelectedId) {
-      newSelectedId = newKeyframes[0].id;
+        // Look for a keyframe having data for the active layer
+        const kfWithActiveLayerData = newKeyframes.find(k => 
+            k.layerStates.some(ls => ls.layerId === state.ui.selectedLayerId && ls.strokes.length > 0)
+        );
+        if (kfWithActiveLayerData) {
+            newSelectedId = kfWithActiveLayerData.id;
+            newAxes = state.project.axes.map(a => {
+                if (kfWithActiveLayerData.axisValues[a.id] !== undefined) {
+                    return { ...a, currentValue: kfWithActiveLayerData.axisValues[a.id] };
+                }
+                return a;
+            });
+        } else {
+            newSelectedId = newKeyframes[0]?.id || null;
+            if (newKeyframes[0]) {
+                newAxes = state.project.axes.map(a => {
+                    if (newKeyframes[0].axisValues[a.id] !== undefined) {
+                        return { ...a, currentValue: newKeyframes[0].axisValues[a.id] };
+                    }
+                    return a;
+                });
+            }
+        }
     }
 
     return {
-      project: { ...state.project, keyframes: newKeyframes },
-      ui: { ...state.ui, selectedKeyframeId: newSelectedId },
+      project: { ...state.project, keyframes: newKeyframes, axes: newAxes },
+      ui: { ...state.ui, selectedKeyframeId: newSelectedId, selectedStrokeId: null },
       history: { past, future: [] }
     };
   }),
+
+  deleteKeyframeStateForLayer: (keyframeId, layerId) => {
+    get().deleteKeyframe(keyframeId, layerId);
+  },
 
   updateKeyframePosition: (keyframeId, x, y) => set((state) => {
      const past = [...state.history.past, state.project].slice(-MAX_HISTORY);

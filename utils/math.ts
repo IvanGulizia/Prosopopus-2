@@ -1,5 +1,5 @@
 // utils/math.ts
-import { Point, Stroke, InterpolationStrategy, SymmetryType } from '../types';
+import { Point, Stroke, InterpolationStrategy, SymmetryType, CornerRadii, ShapeType, ShapeConfig } from '../types';
 
 export const distance = (p1: Point, p2: Point): number => {
   return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
@@ -427,11 +427,27 @@ export interface InterpolationOvershootOptions {
 export const interpolateStrokePoints = (
   strokeId: string,
   basePoints: Point[], 
-  keyframesData: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number, cornerRoundness: number }[],
+  keyframesData: { 
+    weight: number; 
+    points: Point[] | undefined; 
+    style: Stroke | undefined; 
+    color: string; 
+    fillColor: string; 
+    width: number; 
+    cornerRoundness: number;
+    cornerRadii?: CornerRadii;
+  }[],
   mode: 'resample' | 'points' | 'spline' | 'length' = 'resample',
   targetCount: number = 200,
   overshootOptions?: InterpolationOvershootOptions
-): { points: Point[], color: string, fillColor: string, width: number, cornerRoundness: number } => {
+): { 
+  points: Point[]; 
+  color: string; 
+  fillColor: string; 
+  width: number; 
+  cornerRoundness: number;
+  cornerRadii?: CornerRadii;
+} => {
   
   // 1. Filter active keyframes (weights can be negative or > 1 in extrapolation mode)
   const activeKeyframes = keyframesData.filter(k => Math.abs(k.weight) > 0.0001 && k.points && k.points.length > 0);
@@ -446,16 +462,78 @@ export const interpolateStrokePoints = (
   let totalWidth = 0;
   let totalCornerRoundness = 0;
   let widthWeightDivisor = 0;
+  let totalTL = 0, totalTR = 0, totalBR = 0, totalBL = 0;
+  let hasRadii = false;
+
   activeKeyframes.forEach(k => {
       const w = Math.max(0, k.weight);
       totalWidth += k.width * w;
       totalCornerRoundness += k.cornerRoundness * w;
       widthWeightDivisor += w;
+
+      const r = k.cornerRadii || k.style?.shapeConfig?.cornerRadii || k.style?.style?.cornerRadii;
+      if (r) {
+        hasRadii = true;
+        totalTL += (r.topLeft ?? 0) * w;
+        totalTR += (r.topRight ?? 0) * w;
+        totalBR += (r.bottomRight ?? 0) * w;
+        totalBL += (r.bottomLeft ?? 0) * w;
+      }
   });
   const width = widthWeightDivisor > 0 ? totalWidth / widthWeightDivisor : 1;
   const cornerRoundness = widthWeightDivisor > 0 ? totalCornerRoundness / widthWeightDivisor : 0;
+  const cornerRadii: CornerRadii | undefined = hasRadii && widthWeightDivisor > 0 ? {
+    topLeft: totalTL / widthWeightDivisor,
+    topRight: totalTR / widthWeightDivisor,
+    bottomRight: totalBR / widthWeightDivisor,
+    bottomLeft: totalBL / widthWeightDivisor
+  } : undefined;
 
-  // 3. Point Count Calculation
+  // 3. Point Count Calculation & Isomorphic Topology Check
+  const firstLen = activeKeyframes[0].points!.length;
+  const allSameLength = activeKeyframes.every(k => k.points!.length === firstLen);
+
+  // If all keyframes share low-poly topology (<= 16 points, like rectangles, triangles, polygons) or mode is 'points':
+  if (allSameLength && (firstLen <= 16 || mode === 'points')) {
+    const resultPoints: Point[] = [];
+    for (let i = 0; i < firstLen; i++) {
+      let x = 0;
+      let y = 0;
+      let pressure = 0;
+      let totalWeight = 0;
+
+      for (const kf of activeKeyframes) {
+        const pt = kf.points![i];
+        x += pt.x * kf.weight;
+        y += pt.y * kf.weight;
+        pressure += (pt.pressure || 0.5) * Math.max(0, kf.weight);
+        totalWeight += kf.weight;
+      }
+
+      if (Math.abs(totalWeight) > 0.0001) {
+        resultPoints.push({
+          x: x / totalWeight,
+          y: y / totalWeight,
+          pressure: pressure / (activeKeyframes.reduce((sum, k) => sum + Math.max(0, k.weight), 0) || 1)
+        });
+      }
+    }
+
+    if (overshootOptions?.exaggerationEnabled && overshootOptions.exaggerationFactor && overshootOptions.exaggerationFactor !== 1.0 && resultPoints.length > 0) {
+      const factor = overshootOptions.exaggerationFactor;
+      let cX = 0, cY = 0;
+      for (const p of resultPoints) { cX += p.x; cY += p.y; }
+      cX /= resultPoints.length;
+      cY /= resultPoints.length;
+      for (let i = 0; i < resultPoints.length; i++) {
+        resultPoints[i].x = cX + (resultPoints[i].x - cX) * factor;
+        resultPoints[i].y = cY + (resultPoints[i].y - cY) * factor;
+      }
+    }
+
+    return { points: resultPoints, color, fillColor, width, cornerRoundness, cornerRadii };
+  }
+
   let ACTUAL_TARGET_COUNT = targetCount; 
   const maxPts = Math.max(...activeKeyframes.map(k => k.points!.length));
 
@@ -469,9 +547,6 @@ export const interpolateStrokePoints = (
   });
   
   const referenceStroke = referenceKeyframe.points!;
-  
-  // We NO LONGER check for closure to switch algorithms.
-  // The algorithm is now ALWAYS Linear.
   const isClosed = false; 
 
   // Resample Reference
@@ -527,7 +602,6 @@ export const interpolateStrokePoints = (
   // Option C (Geometric Overshoot): Exaggeration / Shape Extrusion
   if (overshootOptions?.exaggerationEnabled && overshootOptions.exaggerationFactor && overshootOptions.exaggerationFactor !== 1.0 && resultPoints.length > 0) {
       const factor = overshootOptions.exaggerationFactor;
-      // Calculate geometric centroid of current interpolated stroke
       let cX = 0, cY = 0;
       for (const p of resultPoints) {
           cX += p.x;
@@ -542,7 +616,7 @@ export const interpolateStrokePoints = (
       }
   }
 
-  return { points: resultPoints, color, fillColor, width, cornerRoundness };
+  return { points: resultPoints, color, fillColor, width, cornerRoundness, cornerRadii };
 };
 
 // --- OPTIMIZATION & SMOOTHING ---
@@ -631,6 +705,65 @@ export const chaikinSmooth = (points: Point[], iterations: number = 2): Point[] 
 };
 
 // --- RENDERERS ---
+
+/**
+ * Draws a 4-vertex rectangle/quad with independent corner radii (or uniform corner roundness)
+ * without shrinking the outer dimensions of the shape.
+ * Works seamlessly from a 0-radius sharp rectangle to rounded rectangle to a perfect circle/pill.
+ */
+export const drawRoundedRectangle = (
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  cornerRadii?: CornerRadii,
+  cornerRoundness?: number
+) => {
+  if (points.length < 4) return;
+  const p0 = points[0];
+  const p1 = points[1];
+  const p2 = points[2];
+  const p3 = points[3];
+
+  const w = distance(p0, p1);
+  const h = distance(p1, p2);
+  if (w < 0.1 || h < 0.1) return;
+
+  const maxR = Math.min(w, h) / 2;
+
+  let tl = 0, tr = 0, br = 0, bl = 0;
+  if (cornerRadii) {
+    tl = Math.max(0, Math.min(cornerRadii.topLeft ?? 0, maxR));
+    tr = Math.max(0, Math.min(cornerRadii.topRight ?? 0, maxR));
+    br = Math.max(0, Math.min(cornerRadii.bottomRight ?? 0, maxR));
+    bl = Math.max(0, Math.min(cornerRadii.bottomLeft ?? 0, maxR));
+  } else if (cornerRoundness !== undefined && cornerRoundness > 0) {
+    const r = maxR * (Math.min(100, Math.max(0, cornerRoundness)) / 100);
+    tl = tr = br = bl = r;
+  }
+
+  // Scale down if adjacent radii sum exceeds edge length
+  if (tl + tr > w && (tl + tr) > 0) { const f = w / (tl + tr); tl *= f; tr *= f; }
+  if (bl + br > w && (bl + br) > 0) { const f = w / (bl + br); bl *= f; br *= f; }
+  if (tl + bl > h && (tl + bl) > 0) { const f = h / (tl + bl); tl *= f; bl *= f; }
+  if (tr + br > h && (tr + br) > 0) { const f = h / (tr + br); tr *= f; br *= f; }
+
+  // Unit direction vectors along edges
+  const u01 = { x: (p1.x - p0.x) / w, y: (p1.y - p0.y) / w };
+  const u12 = { x: (p2.x - p1.x) / h, y: (p2.y - p1.y) / h };
+  const u23 = { x: (p3.x - p2.x) / w, y: (p3.y - p2.y) / w };
+  const u30 = { x: (p0.x - p3.x) / h, y: (p0.y - p3.y) / h };
+
+  ctx.beginPath();
+  ctx.moveTo(p0.x + u01.x * tl, p0.y + u01.y * tl);
+  ctx.lineTo(p1.x - u01.x * tr, p1.y - u01.y * tr);
+  ctx.arcTo(p1.x, p1.y, p2.x, p2.y, tr);
+  ctx.lineTo(p2.x - u12.x * br, p2.y - u12.y * br);
+  ctx.arcTo(p2.x, p2.y, p3.x, p3.y, br);
+  ctx.lineTo(p3.x - u23.x * bl, p3.y - u23.y * bl);
+  ctx.arcTo(p3.x, p3.y, p0.x, p0.y, bl);
+  ctx.lineTo(p0.x - u30.x * tl, p0.y - u30.y * tl);
+  ctx.arcTo(p0.x, p0.y, p1.x, p1.y, tl);
+  ctx.closePath();
+};
 
 export const drawCornerRoundedPath = (ctx: CanvasRenderingContext2D, uniquePoints: Point[], roundness: number) => {
     // 1. TOPOLOGY PRESERVATION:
@@ -867,4 +1000,169 @@ export const getUnifiedSymmetricContour = (
   }
 
   return points;
+};
+
+// ==========================================
+// --- SHAPE GENERATION & FIGMA MANIPULATION ---
+// ==========================================
+
+/**
+ * Generates the clean fixed-topology 5-point boundary vertices for a rectangle.
+ * (Top-Left, Top-Right, Bottom-Right, Bottom-Left, Top-Left)
+ * All roundness is rendered dynamically via drawRoundedRectangle, preserving
+ * the exact 4-corner topology for flawless interpolation and zero resizing artifacts.
+ */
+export const generateRectanglePoints = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  _radii: CornerRadii = { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },
+  rotationRad: number = 0,
+  _targetPointCount: number = 5
+): Point[] => {
+  const w = Math.abs(width);
+  const h = Math.abs(height);
+  if (w < 1 || h < 1) return [];
+
+  const minX = Math.min(x, x + width);
+  const minY = Math.min(y, y + height);
+  const maxX = minX + w;
+  const maxY = minY + h;
+
+  let points: Point[] = [
+    { x: minX, y: minY, pressure: 0.5 }, // Top-Left
+    { x: maxX, y: minY, pressure: 0.5 }, // Top-Right
+    { x: maxX, y: maxY, pressure: 0.5 }, // Bottom-Right
+    { x: minX, y: maxY, pressure: 0.5 }, // Bottom-Left
+    { x: minX, y: minY, pressure: 0.5 }  // Close Loop
+  ];
+
+  if (rotationRad !== 0) {
+    const center = { x: minX + w / 2, y: minY + h / 2 };
+    points = points.map(p => rotatePoint(p, center, rotationRad));
+  }
+
+  return points;
+};
+
+/**
+ * Generates the 5 boundary vertices for an ellipse/circle bounding box.
+ * Shared topology with rectangles so rectangle-to-circle morphing is 100% isomorphic.
+ */
+export const generateEllipsePoints = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  rotationRad: number = 0,
+  _targetPointCount: number = 5
+): Point[] => {
+  return generateRectanglePoints(x, y, width, height, undefined, rotationRad);
+};
+
+/**
+ * Generates vertices for a regular polygon (Triangle, Pentagon, Hexagon, etc.)
+ */
+export const generatePolygonPoints = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  sides: number = 5,
+  rotationRad: number = 0,
+  _targetPointCount: number = 200
+): Point[] => {
+  const w = Math.abs(width);
+  const h = Math.abs(height);
+  if (w < 1 || h < 1) return [];
+
+  const minX = Math.min(x, x + width);
+  const minY = Math.min(y, y + height);
+  const rx = w / 2;
+  const ry = h / 2;
+  const cx = minX + rx;
+  const cy = minY + ry;
+
+  const numSides = Math.max(3, sides);
+  const vertices: Point[] = [];
+
+  // Starting at top (-PI/2)
+  for (let i = 0; i < numSides; i++) {
+    const theta = -Math.PI / 2 + (i / numSides) * Math.PI * 2;
+    const px = cx + rx * Math.cos(theta);
+    const py = cy + ry * Math.sin(theta);
+    let p: Point = { x: px, y: py, pressure: 0.5 };
+    if (rotationRad !== 0) {
+      p = rotatePoint(p, { x: cx, y: cy }, rotationRad);
+    }
+    vertices.push(p);
+  }
+  vertices.push(vertices[0]); // close loop
+
+  return vertices;
+};
+
+/**
+ * Generates points for any supported ShapeConfig with clean low-poly fixed topology.
+ */
+export const generateShapePoints = (
+  config: ShapeConfig,
+  _targetPointCount: number = 5
+): Point[] => {
+  const rotation = config.rotation || 0;
+  const startX = config.minX ?? config.x ?? 0;
+  const startY = config.minY ?? config.y ?? 0;
+
+  switch (config.type) {
+    case 'ellipse':
+      return generateEllipsePoints(startX, startY, config.width, config.height, rotation);
+    case 'polygon':
+      return generatePolygonPoints(startX, startY, config.width, config.height, config.sides || 5, rotation);
+    case 'rectangle':
+    default:
+      return generateRectanglePoints(
+        startX,
+        startY,
+        config.width,
+        config.height,
+        config.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },
+        rotation
+      );
+  }
+};
+
+/**
+ * Calculates corner handle positions for interactive Figma-style dragging on Canvas.
+ */
+export const getCornerHandlePositions = (
+  bounds: { minX: number; minY: number; width: number; height: number; rotation?: number },
+  radii: CornerRadii = { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 }
+): { corner: keyof CornerRadii; x: number; y: number }[] => {
+  const { minX, minY, width, height, rotation = 0 } = bounds;
+  const maxR = Math.min(width, height) / 2;
+
+  // Offset distance inside each corner (minimum 12px or radius)
+  const getOffset = (r: number) => {
+    if (r <= 2) return Math.min(16, maxR * 0.4);
+    return Math.min(r, maxR * 0.85);
+  };
+
+  const center = { x: minX + width / 2, y: minY + height / 2 };
+
+  const rawHandles: { corner: keyof CornerRadii; x: number; y: number }[] = [
+    { corner: 'topLeft', x: minX + getOffset(radii.topLeft), y: minY + getOffset(radii.topLeft) },
+    { corner: 'topRight', x: minX + width - getOffset(radii.topRight), y: minY + getOffset(radii.topRight) },
+    { corner: 'bottomRight', x: minX + width - getOffset(radii.bottomRight), y: minY + height - getOffset(radii.bottomRight) },
+    { corner: 'bottomLeft', x: minX + getOffset(radii.bottomLeft), y: minY + height - getOffset(radii.bottomLeft) },
+  ];
+
+  if (rotation !== 0) {
+    return rawHandles.map(h => {
+      const rot = rotatePoint({ x: h.x, y: h.y }, center, rotation);
+      return { corner: h.corner, x: rot.x, y: rot.y };
+    });
+  }
+
+  return rawHandles;
 };

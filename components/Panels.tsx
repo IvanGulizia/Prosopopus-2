@@ -322,6 +322,7 @@ export const SettingsPanel: React.FC = () => {
       setLayerCornerRoundness, setStrokeCap,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
       updateCanvasSize, renameProject, setStrokeResolution,
+      setStrokeSmoothingFactor,
       toggleSymmetry, setSymmetryType, setSymmetryAxisX, setSymmetryAxisY,
       setSymmetryRadialCount, setSymmetryTarget, toggleShowSymmetryAxis, resetSymmetryToCenter
   } = useStore();
@@ -377,6 +378,8 @@ export const SettingsPanel: React.FC = () => {
               ghostStrokeOpacity: ui.ghostStrokeOpacity,
               redrawGhostOpacity: ui.redrawGhostOpacity,
               smoothingEnabled: ui.smoothingEnabled,
+              strokeSmoothingFactor: ui.strokeSmoothingFactor,
+              strokeResolution: ui.strokeResolution,
               resolutionScale: ui.resolutionScale,
               performanceMode: ui.performanceMode,
               snapPlayMode: ui.snapPlayMode,
@@ -598,6 +601,55 @@ export const SettingsPanel: React.FC = () => {
                      </label>
                  </div>
 
+                 {/* INDEPENDENT CORNER RADII (FIGMA-STYLE) */}
+                 <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-2">
+                     <div className="flex justify-between items-center">
+                         <label className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Independent Corners (px)</label>
+                     </div>
+                     <div className="grid grid-cols-2 gap-2">
+                         <div>
+                             <span className="text-[10px] text-gray-400">Top-Left</span>
+                             <input 
+                                 type="number" 
+                                 min="0" max="200" 
+                                 value={ui.cornerRadii?.topLeft ?? 0} 
+                                 onChange={(e) => useStore.getState().setCornerRadius('topLeft', parseInt(e.target.value) || 0)} 
+                                 className="w-full bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700" 
+                             />
+                         </div>
+                         <div>
+                             <span className="text-[10px] text-gray-400">Top-Right</span>
+                             <input 
+                                 type="number" 
+                                 min="0" max="200" 
+                                 value={ui.cornerRadii?.topRight ?? 0} 
+                                 onChange={(e) => useStore.getState().setCornerRadius('topRight', parseInt(e.target.value) || 0)} 
+                                 className="w-full bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700" 
+                             />
+                         </div>
+                         <div>
+                             <span className="text-[10px] text-gray-400">Bottom-Left</span>
+                             <input 
+                                 type="number" 
+                                 min="0" max="200" 
+                                 value={ui.cornerRadii?.bottomLeft ?? 0} 
+                                 onChange={(e) => useStore.getState().setCornerRadius('bottomLeft', parseInt(e.target.value) || 0)} 
+                                 className="w-full bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700" 
+                             />
+                         </div>
+                         <div>
+                             <span className="text-[10px] text-gray-400">Bottom-Right</span>
+                             <input 
+                                 type="number" 
+                                 min="0" max="200" 
+                                 value={ui.cornerRadii?.bottomRight ?? 0} 
+                                 onChange={(e) => useStore.getState().setCornerRadius('bottomRight', parseInt(e.target.value) || 0)} 
+                                 className="w-full bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700" 
+                             />
+                         </div>
+                     </div>
+                 </div>
+
                  {/* STROKE CAP CONTROL */}
                  <div>
                      <label className="text-xs font-medium text-gray-600 mb-2 block">Stroke Cap</label>
@@ -614,8 +666,22 @@ export const SettingsPanel: React.FC = () => {
                      </div>
                  </div>
 
-                 <SettingsToggle label="Enable Smoothing" active={ui.smoothingEnabled} onClick={toggleSmoothing} />
-                  <SettingsToggle label="Enable Smoothing" active={ui.smoothingEnabled} onClick={toggleSmoothing} />
+                 <div className="space-y-2 pt-2 border-t border-gray-100">
+                     <SettingsToggle label="Enable Smoothing (Lissage)" active={ui.smoothingEnabled} onClick={toggleSmoothing} />
+                     {ui.smoothingEnabled && (
+                         <SettingsRow label="Smoothing Strength" value={`${Math.round((ui.strokeSmoothingFactor ?? 0.2) * 100)}%`}>
+                             <input 
+                                 type="range" 
+                                 min="0" 
+                                 max="1" 
+                                 step="0.05" 
+                                 value={ui.strokeSmoothingFactor ?? 0.2} 
+                                 onChange={(e) => setStrokeSmoothingFactor(parseFloat(e.target.value))} 
+                                 className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                             />
+                         </SettingsRow>
+                     )}
+                 </div>
              </div>
         </SettingsSection>
 
@@ -1115,28 +1181,101 @@ export const SettingsPanel: React.FC = () => {
 
         {/* SECTION: PERFORMANCE (MOVED BOTTOM) */}
         <SettingsSection 
-            title="Performance" 
+            title="Performance & Stroke Detail" 
             isOpen={openSections.includes('performance')}
             onToggle={() => toggleSection('performance')}
             theme={theme}
         >
-             <SettingsToggle label="Performance Mode (Low Poly)" active={ui.performanceMode} onClick={togglePerformanceMode} />
-             
-             <SettingsRow label="Resolution Scale" value={`${ui.resolutionScale.toFixed(1)}x`}>
-                 <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-gray-400">Perf</span>
-                    <input 
-                        type="range" 
-                        min="0.5" 
-                        max="3.0" 
-                        step="0.1" 
-                        value={ui.resolutionScale} 
-                        onChange={(e) => setResolutionScale(parseFloat(e.target.value))} 
-                        className="flex-1 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-500 hover:accent-purple-600"
-                    />
-                    <span className="text-[10px] text-gray-400">Quality</span>
+             <div className="space-y-4">
+                 {/* Stroke Detail / Points Density */}
+                 <div className="bg-blue-50/40 rounded-xl p-3 border border-blue-100 space-y-2.5">
+                     <SettingsRow label="Stroke Detail (Point Count)" value={`${ui.strokeResolution} pts`}>
+                         <input 
+                             type="range" 
+                             min="50" 
+                             max="1200" 
+                             step="25" 
+                             value={ui.strokeResolution} 
+                             onChange={(e) => setStrokeResolution(parseInt(e.target.value))} 
+                             className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                         />
+                     </SettingsRow>
+                     
+                     <div className="grid grid-cols-4 gap-1 pt-1">
+                         {[
+                             { label: 'Eco', val: 100 },
+                             { label: 'Normal', val: 300 },
+                             { label: 'Détaillé', val: 600 },
+                             { label: 'Ultra', val: 1000 },
+                         ].map(p => (
+                             <button
+                                 key={p.val}
+                                 onClick={() => setStrokeResolution(p.val)}
+                                 className={`py-1 text-[10px] font-bold rounded-md transition-all ${ui.strokeResolution === p.val ? 'bg-blue-600 text-white shadow-xs' : 'bg-white/80 hover:bg-white text-gray-600 border border-gray-200'}`}
+                             >
+                                 {p.label}
+                             </button>
+                         ))}
+                     </div>
+                     <p className="text-[10px] text-gray-500 leading-tight">
+                         Contrôle le nombre de sommets échantillonnés lors de l'interpolation pour préserver la fidélité des formes complexes.
+                     </p>
                  </div>
-             </SettingsRow>
+
+                 {/* Stroke Smoothing / Fidelity */}
+                 <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-2.5">
+                     <SettingsToggle label="Lissage Automatique (Smoothing)" active={ui.smoothingEnabled} onClick={toggleSmoothing} />
+                     
+                     {ui.smoothingEnabled && (
+                         <div className="space-y-2 pt-2 border-t border-gray-200/60">
+                             <SettingsRow 
+                                 label="Fidélité / Force du Lissage" 
+                                 value={
+                                     (ui.strokeSmoothingFactor ?? 0.2) <= 0.05 
+                                         ? '0% (Brut)' 
+                                         : `${Math.round((ui.strokeSmoothingFactor ?? 0.2) * 100)}%`
+                                 }
+                             >
+                                 <input 
+                                     type="range" 
+                                     min="0" 
+                                     max="1" 
+                                     step="0.05" 
+                                     value={ui.strokeSmoothingFactor ?? 0.2} 
+                                     onChange={(e) => setStrokeSmoothingFactor(parseFloat(e.target.value))} 
+                                     className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                                 />
+                             </SettingsRow>
+                             <div className="flex justify-between text-[9px] text-gray-400 font-medium">
+                                 <span>0% (Brut & Précis)</span>
+                                 <span>50% (Équilibré)</span>
+                                 <span>100% (Ultra Lissé)</span>
+                             </div>
+                         </div>
+                     )}
+                 </div>
+
+                 {/* Canvas Resolution Scale & Performance Mode */}
+                 <div className="space-y-3 pt-1">
+                     <SettingsToggle label="Mode Éco / Performance (Low Poly)" active={ui.performanceMode} onClick={togglePerformanceMode} />
+                     
+                     <SettingsRow label="Resolution Scale (Canvas DPI)" value={`${ui.resolutionScale.toFixed(1)}x`}>
+                         <div className="flex items-center gap-3">
+                            <span className="text-[10px] text-gray-400">1x</span>
+                            <input 
+                                type="range" 
+                                min="0.5" 
+                                max="3.0" 
+                                step="0.1" 
+                                value={ui.resolutionScale} 
+                                onChange={(e) => setResolutionScale(parseFloat(e.target.value))} 
+                                className="flex-1 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-500 hover:accent-purple-600"
+                            />
+                            <span className="text-[10px] text-gray-400">3x</span>
+                         </div>
+                     </SettingsRow>
+                 </div>
+             </div>
         </SettingsSection>
 
       </div>

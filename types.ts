@@ -15,12 +15,35 @@ export interface Size {
 // --- Vector Elements ---
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
 
+export interface CornerRadii {
+  topLeft: number;
+  topRight: number;
+  bottomRight: number;
+  bottomLeft: number;
+}
+
+export type ShapeType = 'rectangle' | 'ellipse' | 'polygon' | 'star';
+
+export interface ShapeConfig {
+  type: ShapeType;
+  x?: number;
+  y?: number;
+  minX?: number;
+  minY?: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  cornerRadii?: CornerRadii;
+  sides?: number; // For polygon/star
+}
+
 export interface StyleProps {
   strokeColor: string | 'none';
   strokeWidth: number;
   fillColor: string | 'none';
   lineStyle: LineStyle;
   cornerRoundness?: number; // 0 to 100
+  cornerRadii?: CornerRadii; // Independent 4 corners
   strokeCap?: 'round' | 'butt' | 'square';
   strokeResolution?: number; // Target point count for interpolation (default 200)
 }
@@ -30,6 +53,7 @@ export interface Stroke {
   points: Point[];
   closed: boolean; // True for shapes, false for lines
   style?: Partial<StyleProps>; // Overrides for this specific stroke state
+  shapeConfig?: ShapeConfig; // Stored shape metadata for non-destructive direct editing
 }
 
 // --- Layers ---
@@ -97,7 +121,7 @@ export interface Project {
 }
 
 // --- UI State ---
-export type ToolType = 'cursor' | 'select' | 'pen' | 'polyline'; 
+export type ToolType = 'cursor' | 'select' | 'pen' | 'polyline' | 'shape'; 
 export type UIMode = 'edit' | 'play';
 // 'bilinear-grid' separates axes logic for stable matrix interpolation
 export type InterpolationStrategy = 'idw' | 'bilinear-grid'; 
@@ -189,6 +213,7 @@ export interface UIState {
   
   // Animation Helpers
   smoothingEnabled: boolean; // Renamed from simplifyStrokes
+  strokeSmoothingFactor: number; // 0 to 1 (0 = Raw/Ultra-detailed, 1 = Heavy smoothing)
   onionSkinEnabled: boolean;
   onionSkinOpacity: number;
   onionSkinMode: OnionSkinMode; // 'wireframe' | 'styled' | 'both'
@@ -206,6 +231,9 @@ export interface UIState {
   brushColor: string | 'none'; // Can be none now
   fillColor: string | 'none'; 
   cornerRoundness: number; // 0 to 100
+  cornerRadii: CornerRadii; // Independent 4 corners
+  shapeType: ShapeType; // 'rectangle' | 'ellipse' | 'polygon' | 'star'
+  shapeSides: number; // For polygon/star (default 5)
   strokeResolution: number; // Target point count for interpolation
 
   // Symmetry

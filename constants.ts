@@ -134,7 +134,8 @@ export const INITIAL_UI_STATE: UIState = {
 
   gridSize: 40, 
   
-  smoothingEnabled: true, // DEFAULT TRUE (Smooth curves)
+  smoothingEnabled: true, // Smoothing toggle
+  strokeSmoothingFactor: 0.2, // 0 to 1 (0 = Raw/Detailed points, 1 = Heavy smoothing)
   onionSkinEnabled: true,
   onionSkinOpacity: 0.15,
   onionSkinMode: 'both',
@@ -150,7 +151,10 @@ export const INITIAL_UI_STATE: UIState = {
   brushColor: '#000000',
   fillColor: 'none', 
   cornerRoundness: 0,
-  strokeResolution: 200,
+  cornerRadii: { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },
+  shapeType: 'rectangle',
+  shapeSides: 5,
+  strokeResolution: 400, // High fidelity point resolution
 
   // Symmetry
   symmetryEnabled: false,
@@ -162,5 +166,5 @@ export const INITIAL_UI_STATE: UIState = {
   showSymmetryAxis: true,
 
   resolutionScale: 1.5, // Crisp default without killing FPS (Retina is usually 2 or 3)
-  performanceMode: true, // DEFAULT: ECO MODE
+  performanceMode: false, // Default high fidelity, toggleable for low-spec devices
 };

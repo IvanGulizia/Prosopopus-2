@@ -11,6 +11,7 @@ const Icons = {
   Pen: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>,
   // UPDATED ICON: Shows explicit nodes and connections
   PolyIcon: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 7 3 10 8-12"/><circle cx="7" cy="7" r="2"/><circle cx="10" cy="17" r="2"/><circle cx="18" cy="5" r="2"/></svg>,
+  Shape: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="4"/></svg>,
   Settings: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>,
   Undo: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>,
   Symmetry: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="21" strokeDasharray="3 3"/><path d="M12 5H7a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h5"/><path d="M12 5h5a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5"/></svg>,
@@ -99,6 +100,7 @@ export const Toolbar: React.FC = () => {
           />
           <ToolButton tool="pen" icon={Icons.Pen} label="Pen" />
           <ToolButton tool="polyline" icon={Icons.PolyIcon} label="Polyline" />
+          <ToolButton tool="shape" icon={Icons.Shape} label="Shape / Rectangle" />
 
           <button
             onClick={(e) => { 

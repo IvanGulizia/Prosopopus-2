@@ -1,13 +1,14 @@
 // components/Canvas.tsx
 import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
-import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment, getSymmetricPoints } from '../utils/math';
+import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawRoundedRectangle, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment, getSymmetricPoints, generateRectanglePoints, generateEllipsePoints, generatePolygonPoints, generateShapePoints, getCornerHandlePositions } from '../utils/math';
 import { resolveStrokeStyle } from '../utils/style';
-import { Point } from '../types';
+import { Point, CornerRadii, ShapeConfig } from '../types';
 import { APP_COLORS } from '../constants';
 
-type InteractionMode = 'none' | 'drawing' | 'polyline' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex';
+type InteractionMode = 'none' | 'drawing' | 'polyline' | 'drawingShape' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex' | 'draggingCorner';
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br';
+type CornerHandle = keyof CornerRadii;
 
 export const Canvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -15,8 +16,8 @@ export const Canvas: React.FC = () => {
   
   const { 
       ui, project, updateAxisValue, updateMultipleAxisValues, 
-      addStrokeToCurrentKeyframe, updateStrokeInCurrentKeyframe, selectStroke,
-      undo, redo, deleteStroke, setTransformMode
+      addStrokeToCurrentKeyframe, updateStrokeInCurrentKeyframe, selectStroke, selectLayer,
+      undo, redo, deleteStroke, setTransformMode, setTool, addOrUpdateShapeStroke, setCornerRadii, setCornerRadius
   } = useStore();
   
   // -- Stable Refs for Animation Loop --
@@ -70,6 +71,14 @@ export const Canvas: React.FC = () => {
   useEffect(() => { transformStartRef.current = transformStart; }, [transformStart]);
 
   const [activeHandle, setActiveHandle] = useState<ResizeHandle | null>(null);
+  const [activeCornerHandle, setActiveCornerHandle] = useState<CornerHandle | null>(null);
+  const activeCornerHandleRef = useRef<CornerHandle | null>(null);
+  useEffect(() => { activeCornerHandleRef.current = activeCornerHandle; }, [activeCornerHandle]);
+
+  const [shapeDragStart, setShapeDragStart] = useState<{ startPoint: Point; currentPoint: Point } | null>(null);
+  const shapeDragStartRef = useRef<{ startPoint: Point; currentPoint: Point } | null>(null);
+  useEffect(() => { shapeDragStartRef.current = shapeDragStart; }, [shapeDragStart]);
+
   const [activeVertexIndex, setActiveVertexIndex] = useState<number | null>(null);
   const activeVertexIndexRef = useRef<number | null>(null);
   useEffect(() => { activeVertexIndexRef.current = activeVertexIndex; }, [activeVertexIndex]);
@@ -336,7 +345,7 @@ export const Canvas: React.FC = () => {
   }, [ui.selectedTool, ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedLayerId, polylinePoints, project.keyframes, isVertexMode]);
 
   useEffect(() => {
-    if (ui.selectedTool !== 'select' || !ui.selectedStrokeId || !ui.selectedKeyframeId) {
+    if ((ui.selectedTool !== 'select' && ui.selectedTool !== 'shape') || !ui.selectedStrokeId || !ui.selectedKeyframeId) {
         setSelectionBounds(null);
         return;
     }
@@ -348,7 +357,7 @@ export const Canvas: React.FC = () => {
     if (!stroke) return;
     const bbox = getBoundingBox(stroke.points);
     setSelectionBounds({
-        cx: bbox.centerX, cy: bbox.centerY, width: bbox.width, height: bbox.height, rotation: 0
+        cx: bbox.centerX, cy: bbox.centerY, width: bbox.width, height: bbox.height, rotation: stroke.shapeConfig?.rotation || 0
     });
   }, [ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedLayerId, ui.selectedTool, project.keyframes]);
 
@@ -357,13 +366,30 @@ export const Canvas: React.FC = () => {
       const { cx, cy, width, height, rotation } = bounds;
       const hw = width / 2; const hh = height / 2;
       const localP = rotatePoint(p, {x: cx, y: cy}, -rotation);
-      const HANDLE_SIZE = 10 / scale;
+      const HANDLE_SIZE = 12 / scale;
       if (distance(localP, {x: cx, y: cy - hh - 25}) < HANDLE_SIZE) return 'rotator';
       if (distance(localP, {x: cx - hw, y: cy - hh}) < HANDLE_SIZE) return 'tl';
       if (distance(localP, {x: cx + hw, y: cy - hh}) < HANDLE_SIZE) return 'tr';
       if (distance(localP, {x: cx - hw, y: cy + hh}) < HANDLE_SIZE) return 'bl';
       if (distance(localP, {x: cx + hw, y: cy + hh}) < HANDLE_SIZE) return 'br';
       if (localP.x >= cx - hw && localP.x <= cx + hw && localP.y >= cy - hh && localP.y <= cy + hh) return 'body';
+      return null;
+  };
+
+  const getCornerGizmoHit = (p: Point, bounds: { cx: number, cy: number, width: number, height: number, rotation: number } | null, radii?: CornerRadii): CornerHandle | null => {
+      if (!bounds) return null;
+      const minX = bounds.cx - bounds.width / 2;
+      const minY = bounds.cy - bounds.height / 2;
+      const handles = getCornerHandlePositions(
+        { minX, minY, width: bounds.width, height: bounds.height, rotation: bounds.rotation },
+        radii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 }
+      );
+      const HIT_RADIUS = 10 / scale;
+      for (const h of handles) {
+        if (distance(p, { x: h.x, y: h.y }) <= HIT_RADIUS) {
+          return h.corner;
+        }
+      }
       return null;
   };
 
@@ -375,16 +401,30 @@ export const Canvas: React.FC = () => {
       return -1;
   };
 
-  const findHitStroke = (p: Point): string | null => {
+  // Direct Selection Across All Visible Layers (Figma-style)
+  const findHitStrokeAcrossLayers = (p: Point): { strokeId: string; layerId: string } | null => {
      const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
      if (!kf) return null;
-     const layerState = kf.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
-     if (!layerState) return null;
-     for (let i = layerState.strokes.length - 1; i >= 0; i--) {
-        const s = layerState.strokes[i];
-        if (isPointInStroke(p, s.points)) return s.id;
+
+     // Search from topmost layer to bottom
+     const layers = [...project.layers].filter(l => !l.id.includes('-sym-') && l.visible && !l.locked);
+     for (let li = layers.length - 1; li >= 0; li--) {
+        const layer = layers[li];
+        const layerState = kf.layerStates.find(ls => ls.layerId === layer.id);
+        if (!layerState) continue;
+        for (let i = layerState.strokes.length - 1; i >= 0; i--) {
+           const s = layerState.strokes[i];
+           if (isPointInStroke(p, s.points)) {
+              return { strokeId: s.id, layerId: layer.id };
+           }
+        }
      }
      return null;
+  };
+
+  const findHitStroke = (p: Point): string | null => {
+     const hit = findHitStrokeAcrossLayers(p);
+     return hit ? hit.strokeId : null;
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -399,9 +439,31 @@ export const Canvas: React.FC = () => {
        return;
     }
 
-    if (ui.selectedTool === 'select') {
-        
-        if (isVertexMode && ui.selectedStrokeId) {
+    if (ui.selectedTool === 'select' || ui.selectedTool === 'shape') {
+        // First check corner handles if a shape with corner handles is selected
+        if (ui.selectedStrokeId && selectionBounds) {
+            const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+            const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
+            const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+            const strokeRadii = stroke?.shapeConfig?.cornerRadii || stroke?.style?.cornerRadii || ui.cornerRadii;
+            const hitCorner = getCornerGizmoHit(p, selectionBounds, strokeRadii);
+            if (hitCorner) {
+                setInteractionMode('draggingCorner');
+                setActiveCornerHandle(hitCorner);
+                setTransformStart({
+                    mouse: p,
+                    center: { x: selectionBounds.cx, y: selectionBounds.cy },
+                    angle: selectionBounds.rotation,
+                    width: selectionBounds.width,
+                    height: selectionBounds.height,
+                    points: stroke ? stroke.points : []
+                });
+                (e.target as Element).setPointerCapture(e.pointerId);
+                return;
+            }
+        }
+
+        if (isVertexMode && ui.selectedStrokeId && ui.selectedTool === 'select') {
              const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
              const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
              const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
@@ -484,13 +546,25 @@ export const Canvas: React.FC = () => {
             }
         }
 
-        const hitId = findHitStroke(p);
-        if (hitId) {
-             selectStroke(hitId); 
-             // Do not exit vertex mode if we select another stroke
+        // Direct Hit Testing across layers
+        const hit = findHitStrokeAcrossLayers(p);
+        if (hit) {
+             if (hit.layerId !== ui.selectedLayerId) {
+                 selectLayer(hit.layerId);
+             }
+             selectStroke(hit.strokeId); 
+             return;
         } else {
              if (isVertexMode) {
-                 // Do not deselect if we are in vertex mode and click empty space
+                 return;
+             }
+             if (ui.selectedTool === 'shape') {
+                 // Start drawing a new shape on click-drag
+                 const snappedP = getSnappedPoint(p);
+                 setInteractionMode('drawingShape');
+                 setShapeDragStart({ startPoint: snappedP, currentPoint: snappedP });
+                 selectStroke(null);
+                 (e.target as Element).setPointerCapture(e.pointerId);
                  return;
              }
              selectStroke(null);
@@ -501,8 +575,6 @@ export const Canvas: React.FC = () => {
 
     if (ui.selectedTool === 'polyline') {
        const snappedP = getSnappedPoint(p);
-       // REMOVED AUTO-CLOSE SNAP LOGIC HERE
-       // We strictly just add points. Double-click terminates.
        setPolylinePoints(prev => [...prev, snappedP]);
        return;
     }
@@ -519,6 +591,77 @@ export const Canvas: React.FC = () => {
     setMousePos(getSnappedPoint(p));
 
     if (ui.mode === 'play') return;
+
+    if (interactionModeRef.current === 'drawingShape' && shapeDragStart) {
+        let currentP = p;
+        if (ui.snapToGrid) currentP = getSnappedPoint(p);
+        if (e.shiftKey) {
+            // Square constraint
+            const dx = currentP.x - shapeDragStart.startPoint.x;
+            const dy = currentP.y - shapeDragStart.startPoint.y;
+            const size = Math.max(Math.abs(dx), Math.abs(dy));
+            currentP = {
+                x: shapeDragStart.startPoint.x + Math.sign(dx || 1) * size,
+                y: shapeDragStart.startPoint.y + Math.sign(dy || 1) * size
+            };
+        }
+        setShapeDragStart({ ...shapeDragStart, currentPoint: currentP });
+        return;
+    }
+
+    if (interactionModeRef.current === 'draggingCorner' && activeCornerHandle && selectionBounds) {
+        const { cx, cy, width, height, rotation } = selectionBounds;
+        const localP = rotatePoint(p, { x: cx, y: cy }, -rotation);
+        const hw = width / 2;
+        const hh = height / 2;
+        const maxR = Math.min(hw, hh);
+
+        // Distance from corner outer vertex towards center
+        let distFromOuter = 0;
+        if (activeCornerHandle === 'topLeft') {
+            distFromOuter = Math.min(localP.x - (-hw), localP.y - (-hh));
+        } else if (activeCornerHandle === 'topRight') {
+            distFromOuter = Math.min(hw - localP.x, localP.y - (-hh));
+        } else if (activeCornerHandle === 'bottomRight') {
+            distFromOuter = Math.min(hw - localP.x, hh - localP.y);
+        } else if (activeCornerHandle === 'bottomLeft') {
+            distFromOuter = Math.min(localP.x - (-hw), hh - localP.y);
+        }
+
+        const calculatedR = Math.max(0, Math.min(maxR, Math.round(distFromOuter)));
+
+        // If Alt key is held down, change ONLY this single corner. Otherwise change all 4!
+        if (e.altKey) {
+            setCornerRadius(activeCornerHandle, calculatedR);
+        } else {
+            setCornerRadius('all', calculatedR);
+        }
+
+        // Real-time update of the shape points in the active keyframe if stroke is a shape
+        if (ui.selectedStrokeId && ui.selectedKeyframeId) {
+            const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+            const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
+            const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+            if (stroke) {
+                const currentRadii = stroke.shapeConfig?.cornerRadii || ui.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+                const newRadii = e.altKey 
+                    ? { ...currentRadii, [activeCornerHandle]: calculatedR }
+                    : { topLeft: calculatedR, topRight: calculatedR, bottomRight: calculatedR, bottomLeft: calculatedR };
+                
+                const newConfig: ShapeConfig = {
+                    type: stroke.shapeConfig?.type || 'rectangle',
+                    minX: cx - width / 2,
+                    minY: cy - height / 2,
+                    width,
+                    height,
+                    cornerRadii: newRadii,
+                    rotation
+                };
+                updateStrokeInCurrentKeyframe(ui.selectedStrokeId, stroke.points, newConfig);
+            }
+        }
+        return;
+    }
 
     if (interactionModeRef.current === 'draggingVertex' && transformStart && activeVertexIndex !== null) {
         let draggedPos = p;
@@ -660,6 +803,40 @@ export const Canvas: React.FC = () => {
     if (ui.mode !== 'play') {
        (e.target as Element).releasePointerCapture(e.pointerId);
     }
+
+    if (interactionModeRef.current === 'drawingShape' && shapeDragStart) {
+        const startP = shapeDragStart.startPoint;
+        const endP = shapeDragStart.currentPoint;
+        const minX = Math.min(startP.x, endP.x);
+        const minY = Math.min(startP.y, endP.y);
+        let width = Math.abs(endP.x - startP.x);
+        let height = Math.abs(endP.y - startP.y);
+
+        // Enforce minimum dimension
+        if (width < 10 && height < 10) {
+            width = 100;
+            height = 100;
+        } else if (width < 5) width = 20;
+        else if (height < 5) height = 20;
+
+        const shapeType = ui.shapeType || 'rectangle';
+        const sides = ui.shapeSides || 5;
+        const cornerRadii = ui.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+
+        const config: ShapeConfig = {
+            type: shapeType,
+            minX,
+            minY,
+            width,
+            height,
+            cornerRadii: shapeType === 'rectangle' ? cornerRadii : undefined,
+            sides: shapeType === 'polygon' ? sides : undefined,
+            rotation: 0
+        };
+
+        addOrUpdateShapeStroke(config);
+        setShapeDragStart(null);
+    }
     
     if ((interactionModeRef.current === 'dragging' || interactionModeRef.current === 'rotating' || interactionModeRef.current === 'resizing') && transformStart && selectionBounds && ui.selectedStrokeId) {
         const scaleX = selectionBounds.width / transformStart.width;
@@ -681,7 +858,12 @@ export const Canvas: React.FC = () => {
         const points = [...currentPointsRef.current];
         addStrokeToCurrentKeyframe(points, false);
     }
-    setInteractionMode('none'); setActiveHandle(null); setTransformStart(null); setActiveVertexIndex(null); currentPointsRef.current = [];
+    setInteractionMode('none'); 
+    setActiveHandle(null); 
+    setActiveCornerHandle(null);
+    setTransformStart(null); 
+    setActiveVertexIndex(null); 
+    currentPointsRef.current = [];
   };
 
   useLayoutEffect(() => {
@@ -707,7 +889,10 @@ export const Canvas: React.FC = () => {
       const currentMousePos = mousePosRef.current;
       
       const dpr = currentUI.resolutionScale || window.devicePixelRatio || 1;
-      const interpolationTargetCount = currentUI.performanceMode ? 80 : 200;
+      const baseResolution = currentUI.strokeResolution || 400;
+      const interpolationTargetCount = currentUI.performanceMode 
+          ? Math.max(40, Math.min(120, Math.round(baseResolution * 0.35))) 
+          : baseResolution;
 
       if (canvas.width !== CANVAS_WIDTH * dpr || canvas.height !== CANVAS_HEIGHT * dpr) {
           canvas.width = CANVAS_WIDTH * dpr;
@@ -894,9 +1079,14 @@ export const Canvas: React.FC = () => {
                 onionPaths.forEach(pts => {
                   if (pts.length === 0) return;
                   
+                  const strokeRadii = stroke.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                  const isQuadShape = pts.length === 4 || pts.length === 5;
+
                   const renderPath = () => {
                     if (isSpline) {
                       drawCatmullRomSpline(ctx, pts, 0.5);
+                    } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
+                      drawRoundedRectangle(ctx, pts, strokeRadii, cornerRoundness);
                     } else {
                       ctx.beginPath();
                       if (cornerRoundness > 0) {
@@ -1024,7 +1214,7 @@ export const Canvas: React.FC = () => {
         const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
         if (!primaryStroke) return;
 
-        let { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness } = interpolateStrokePoints(
+        let { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness, cornerRadii: interpolatedCornerRadii } = interpolateStrokePoints(
             strokeId, 
             primaryStroke.points, 
             strokeData, 
@@ -1099,8 +1289,12 @@ export const Canvas: React.FC = () => {
             allInterpolatedPaths.forEach(pathPts => {
               if (pathPts.length === 0) return;
 
+              const isQuadShape = pathPts.length === 4 || pathPts.length === 5;
+
               if (layer.interpolationMode === 'spline') {
                   drawCatmullRomSpline(ctx, pathPts, 0.5); 
+              } else if (isQuadShape && (interpolatedCornerRadii || interpolatedCornerRoundness > 0)) {
+                  drawRoundedRectangle(ctx, pathPts, interpolatedCornerRadii, interpolatedCornerRoundness);
               } else {
                   ctx.beginPath();
                   if (interpolatedCornerRoundness > 0) {
@@ -1250,7 +1444,57 @@ export const Canvas: React.FC = () => {
          ctx.globalAlpha = 1.0; 
       }
 
-      if (currentSelectionBounds && currentUI.selectedTool === 'select' && currentUI.mode === 'edit') {
+      // Live Shape Drawing Preview
+      if (shapeDragStartRef.current && currentUI.mode === 'edit') {
+        const startP = shapeDragStartRef.current.startPoint;
+        const endP = shapeDragStartRef.current.currentPoint;
+        const minX = Math.min(startP.x, endP.x);
+        const minY = Math.min(startP.y, endP.y);
+        const width = Math.max(1, Math.abs(endP.x - startP.x));
+        const height = Math.max(1, Math.abs(endP.y - startP.y));
+        const shapeType = currentUI.shapeType || 'rectangle';
+        const sides = currentUI.shapeSides || 5;
+        const cornerRadii = currentUI.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+
+        const previewConfig: ShapeConfig = {
+          type: shapeType,
+          minX,
+          minY,
+          width,
+          height,
+          cornerRadii: shapeType === 'rectangle' ? cornerRadii : undefined,
+          sides: shapeType === 'polygon' ? sides : undefined,
+          rotation: 0
+        };
+
+        const previewPts = generateShapePoints(previewConfig);
+        if (previewPts.length > 0) {
+          ctx.save();
+          if (shapeType === 'rectangle' || shapeType === 'ellipse') {
+            drawRoundedRectangle(ctx, previewPts, previewConfig.cornerRadii);
+          } else {
+            ctx.beginPath();
+            ctx.moveTo(previewPts[0].x, previewPts[0].y);
+            for (let i = 1; i < previewPts.length; i++) ctx.lineTo(previewPts[i].x, previewPts[i].y);
+            ctx.closePath();
+          }
+
+          if (currentUI.fillColor !== 'none') {
+            ctx.fillStyle = currentUI.fillColor;
+            ctx.globalAlpha = 0.4;
+            ctx.fill();
+          }
+
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = currentUI.brushColor !== 'none' ? currentUI.brushColor : '#3B82F6';
+          ctx.lineWidth = currentUI.brushSize || 2;
+          ctx.setLineDash([4, 4]);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      if (currentSelectionBounds && (currentUI.selectedTool === 'select' || currentUI.selectedTool === 'shape') && currentUI.mode === 'edit') {
           const { cx, cy, width, height, rotation } = currentSelectionBounds;
           
           if (!isVertexModeActive) {
@@ -1289,6 +1533,30 @@ export const Canvas: React.FC = () => {
             ctx.arc(0, -height/2 - 25, 4, 0, Math.PI * 2);
             ctx.fillStyle = '#3B82F6';
             ctx.fill();
+
+            // Render Figma-like inner Corner Handles
+            const activeKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
+            const activeLayerState = activeKf?.layerStates.find(ls => ls.layerId === currentUI.selectedLayerId);
+            const activeStroke = activeLayerState?.strokes.find(s => s.id === currentUI.selectedStrokeId);
+            const strokeRadii = activeStroke?.shapeConfig?.cornerRadii || activeStroke?.style?.cornerRadii || currentUI.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+            
+            // Calculate corner handles in local coordinates (unrotated)
+            const minX = -width / 2;
+            const minY = -height / 2;
+            const cornerHandles = getCornerHandlePositions(
+              { minX, minY, width, height, rotation: 0 },
+              strokeRadii
+            );
+
+            cornerHandles.forEach(ch => {
+              ctx.beginPath();
+              ctx.arc(ch.x, ch.y, 4.5, 0, Math.PI * 2);
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fill();
+              ctx.lineWidth = 1.5;
+              ctx.strokeStyle = '#3B82F6';
+              ctx.stroke();
+            });
 
             ctx.restore();
           }
