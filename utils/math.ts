@@ -1142,10 +1142,11 @@ export const getCornerHandlePositions = (
   const { minX, minY, width, height, rotation = 0 } = bounds;
   const maxR = Math.min(width, height) / 2;
 
-  // Offset distance inside each corner (minimum 12px or radius)
+  // Offset distance inside each corner (minimum 14px or proportional for small shapes)
   const getOffset = (r: number) => {
-    if (r <= 2) return Math.min(16, maxR * 0.4);
-    return Math.min(r, maxR * 0.85);
+    const defaultInset = Math.min(14, maxR * 0.4);
+    if (r <= 2) return defaultInset;
+    return Math.min(maxR, Math.max(defaultInset, r));
   };
 
   const center = { x: minX + width / 2, y: minY + height / 2 };

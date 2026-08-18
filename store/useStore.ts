@@ -728,25 +728,55 @@ export const useStore = create<StoreState>((set, get) => ({
 
     let newKeyframes = state.project.keyframes;
     if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+      const strokeId = state.ui.selectedStrokeId;
+      const layerId = state.ui.selectedLayerId;
+      const kfId = state.ui.selectedKeyframeId;
+
+      let baseStroke: Stroke | undefined;
+      for (const k of state.project.keyframes) {
+        const ls = k.layerStates.find(l => l.layerId === layerId);
+        const s = ls?.strokes.find(st => st.id === strokeId);
+        if (s) { baseStroke = s; break; }
+      }
+
       newKeyframes = state.project.keyframes.map(kf => {
-        if (kf.id !== state.ui.selectedKeyframeId) return kf;
-        return {
-          ...kf,
-          layerStates: kf.layerStates.map(ls => {
-            if (ls.layerId !== state.ui.selectedLayerId) return ls;
+        if (kf.id !== kfId) return kf;
+        let foundLayer = false;
+        const newLayerStates = kf.layerStates.map(ls => {
+          if (ls.layerId !== layerId) return ls;
+          foundLayer = true;
+          let foundStroke = false;
+          const strokes = ls.strokes.map(s => {
+            if (s.id !== strokeId) return s;
+            foundStroke = true;
             return {
-              ...ls,
-              strokes: ls.strokes.map(s => {
-                if (s.id !== state.ui.selectedStrokeId) return s;
-                return {
-                  ...s,
-                  style: { ...(s.style || {}), cornerRadii: updated },
-                  shapeConfig: s.shapeConfig ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig
-                };
-              })
+              ...s,
+              style: { ...(s.style || {}), cornerRadii: updated },
+              shapeConfig: s.shapeConfig ? { ...s.shapeConfig, cornerRadii: updated } : (baseStroke?.shapeConfig ? { ...baseStroke.shapeConfig, cornerRadii: updated } : undefined)
             };
-          })
-        };
+          });
+          if (!foundStroke && baseStroke) {
+            strokes.push({
+              ...baseStroke,
+              style: { ...(baseStroke.style || {}), cornerRadii: updated },
+              shapeConfig: baseStroke.shapeConfig ? { ...baseStroke.shapeConfig, cornerRadii: updated } : undefined
+            });
+          }
+          return { ...ls, strokes };
+        });
+
+        if (!foundLayer && baseStroke) {
+          newLayerStates.push({
+            layerId,
+            strokes: [{
+              ...baseStroke,
+              style: { ...(baseStroke.style || {}), cornerRadii: updated },
+              shapeConfig: baseStroke.shapeConfig ? { ...baseStroke.shapeConfig, cornerRadii: updated } : undefined
+            }]
+          });
+        }
+
+        return { ...kf, layerStates: newLayerStates };
       });
     }
 
@@ -1162,7 +1192,7 @@ export const useStore = create<StoreState>((set, get) => ({
   selectKeyframe: (keyframeId) => set((state) => {
     let newSelectedStrokeId = state.ui.selectedStrokeId;
     
-    if (state.ui.selectedTool === 'select' && state.ui.selectedLayerId) {
+    if (state.ui.selectedLayerId) {
         const kf = state.project.keyframes.find(k => k.id === keyframeId);
         if (kf) {
             const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
@@ -1170,7 +1200,16 @@ export const useStore = create<StoreState>((set, get) => ({
                 const sameStroke = ls.strokes.find(s => s.id === state.ui.selectedStrokeId);
                 newSelectedStrokeId = sameStroke ? sameStroke.id : ls.strokes[0].id;
             } else {
-                newSelectedStrokeId = null;
+                // If this state does not have strokes yet for active layer, check other keyframes
+                if (!newSelectedStrokeId) {
+                    for (const otherKf of state.project.keyframes) {
+                        const otherLs = otherKf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+                        if (otherLs && otherLs.strokes.length > 0) {
+                            newSelectedStrokeId = otherLs.strokes[0].id;
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1544,29 +1583,70 @@ export const useStore = create<StoreState>((set, get) => ({
 
   updateStrokeInCurrentKeyframe: (strokeId, newPoints, shapeConfig) => set((state) => {
     const kfId = state.ui.selectedKeyframeId;
-    if (!kfId) return state;
+    const layerId = state.ui.selectedLayerId;
+    if (!kfId || !layerId) return state;
+
+    // Find base stroke properties from ANY keyframe if not yet in this keyframe
+    let baseStroke: Stroke | undefined;
+    for (const k of state.project.keyframes) {
+      const ls = k.layerStates.find(l => l.layerId === layerId);
+      const s = ls?.strokes.find(st => st.id === strokeId);
+      if (s) {
+        baseStroke = s;
+        break;
+      }
+    }
 
     const keyframes = state.project.keyframes.map(kf => {
       if (kf.id === kfId) {
-         const newLayerStates = kf.layerStates.map(ls => {
-            if (ls.layerId === state.ui.selectedLayerId) {
-               return {
-                  ...ls,
-                  strokes: ls.strokes.map(s => {
-                     if (s.id === strokeId) {
-                        return {
-                           ...s,
-                           points: newPoints,
-                           shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig
-                        };
-                     }
-                     return s;
-                  })
-               };
+        let foundLayer = false;
+        const newLayerStates = kf.layerStates.map(ls => {
+          if (ls.layerId === layerId) {
+            foundLayer = true;
+            let foundStroke = false;
+            const strokes = ls.strokes.map(s => {
+              if (s.id === strokeId) {
+                foundStroke = true;
+                return {
+                  ...s,
+                  points: newPoints,
+                  shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig
+                };
+              }
+              return s;
+            });
+
+            if (!foundStroke) {
+              // Auto-Keyframe: create stroke inside this layerState
+              strokes.push({
+                id: strokeId,
+                points: newPoints,
+                closed: baseStroke?.closed ?? true,
+                style: baseStroke?.style,
+                shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+              });
             }
-            return ls;
-         });
-         return { ...kf, layerStates: newLayerStates };
+
+            return { ...ls, strokes };
+          }
+          return ls;
+        });
+
+        if (!foundLayer) {
+          // Auto-Keyframe: create layerState with this stroke
+          newLayerStates.push({
+            layerId,
+            strokes: [{
+              id: strokeId,
+              points: newPoints,
+              closed: baseStroke?.closed ?? true,
+              style: baseStroke?.style,
+              shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+            }]
+          });
+        }
+
+        return { ...kf, layerStates: newLayerStates };
       }
       return kf;
     });

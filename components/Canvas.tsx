@@ -3,7 +3,7 @@ import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawRoundedRectangle, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment, getSymmetricPoints, generateRectanglePoints, generateEllipsePoints, generatePolygonPoints, generateShapePoints, getCornerHandlePositions } from '../utils/math';
 import { resolveStrokeStyle } from '../utils/style';
-import { Point, CornerRadii, ShapeConfig } from '../types';
+import { Point, CornerRadii, ShapeConfig, Stroke } from '../types';
 import { APP_COLORS } from '../constants';
 
 type InteractionMode = 'none' | 'drawing' | 'polyline' | 'drawingShape' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex' | 'draggingCorner';
@@ -345,16 +345,27 @@ export const Canvas: React.FC = () => {
   }, [ui.selectedTool, ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedLayerId, polylinePoints, project.keyframes, isVertexMode]);
 
   useEffect(() => {
-    if ((ui.selectedTool !== 'select' && ui.selectedTool !== 'shape') || !ui.selectedStrokeId || !ui.selectedKeyframeId) {
+    if ((ui.selectedTool !== 'select' && ui.selectedTool !== 'shape') || !ui.selectedStrokeId || !ui.selectedLayerId) {
         setSelectionBounds(null);
         return;
     }
-    const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-    if (!kf) return;
-    const layerState = kf.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
-    if (!layerState) return;
-    const stroke = layerState.strokes.find(s => s.id === ui.selectedStrokeId);
-    if (!stroke) return;
+    let stroke: Stroke | undefined;
+    if (ui.selectedKeyframeId) {
+        const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+        const layerState = kf?.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
+        stroke = layerState?.strokes.find(s => s.id === ui.selectedStrokeId);
+    }
+    if (!stroke) {
+        for (const kf of project.keyframes) {
+            const layerState = kf.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
+            const s = layerState?.strokes.find(st => st.id === ui.selectedStrokeId);
+            if (s) { stroke = s; break; }
+        }
+    }
+    if (!stroke) {
+        setSelectionBounds(null);
+        return;
+    }
     const bbox = getBoundingBox(stroke.points);
     setSelectionBounds({
         cx: bbox.centerX, cy: bbox.centerY, width: bbox.width, height: bbox.height, rotation: stroke.shapeConfig?.rotation || 0
@@ -401,22 +412,24 @@ export const Canvas: React.FC = () => {
       return -1;
   };
 
-  // Direct Selection Across All Visible Layers (Figma-style)
+  // Active Layer Selection: Only allow selecting strokes that are on the active layer
   const findHitStrokeAcrossLayers = (p: Point): { strokeId: string; layerId: string } | null => {
      const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
      if (!kf) return null;
 
-     // Search from topmost layer to bottom
-     const layers = [...project.layers].filter(l => !l.id.includes('-sym-') && l.visible && !l.locked);
-     for (let li = layers.length - 1; li >= 0; li--) {
-        const layer = layers[li];
-        const layerState = kf.layerStates.find(ls => ls.layerId === layer.id);
-        if (!layerState) continue;
-        for (let i = layerState.strokes.length - 1; i >= 0; i--) {
-           const s = layerState.strokes[i];
-           if (isPointInStroke(p, s.points)) {
-              return { strokeId: s.id, layerId: layer.id };
-           }
+     const activeLayerId = ui.selectedLayerId;
+     if (!activeLayerId) return null;
+
+     const layer = project.layers.find(l => l.id === activeLayerId && !l.id.includes('-sym-') && l.visible && !l.locked);
+     if (!layer) return null;
+
+     const layerState = kf.layerStates.find(ls => ls.layerId === layer.id);
+     if (!layerState) return null;
+
+     for (let i = layerState.strokes.length - 1; i >= 0; i--) {
+        const s = layerState.strokes[i];
+        if (isPointInStroke(p, s.points)) {
+           return { strokeId: s.id, layerId: layer.id };
         }
      }
      return null;
@@ -616,21 +629,29 @@ export const Canvas: React.FC = () => {
         const hh = height / 2;
         const maxR = Math.min(hw, hh);
 
-        // Distance from corner outer vertex towards center
+        // Distance from corner outer vertex towards center (Figma-style drag)
         let distFromOuter = 0;
         if (activeCornerHandle === 'topLeft') {
-            distFromOuter = Math.min(localP.x - (-hw), localP.y - (-hh));
+            const dx = localP.x - (-hw);
+            const dy = localP.y - (-hh);
+            distFromOuter = (dx + dy) / 2;
         } else if (activeCornerHandle === 'topRight') {
-            distFromOuter = Math.min(hw - localP.x, localP.y - (-hh));
+            const dx = hw - localP.x;
+            const dy = localP.y - (-hh);
+            distFromOuter = (dx + dy) / 2;
         } else if (activeCornerHandle === 'bottomRight') {
-            distFromOuter = Math.min(hw - localP.x, hh - localP.y);
+            const dx = hw - localP.x;
+            const dy = hh - localP.y;
+            distFromOuter = (dx + dy) / 2;
         } else if (activeCornerHandle === 'bottomLeft') {
-            distFromOuter = Math.min(localP.x - (-hw), hh - localP.y);
+            const dx = localP.x - (-hw);
+            const dy = hh - localP.y;
+            distFromOuter = (dx + dy) / 2;
         }
 
         const calculatedR = Math.max(0, Math.min(maxR, Math.round(distFromOuter)));
 
-        // If Alt key is held down, change ONLY this single corner. Otherwise change all 4!
+        // If Alt/Option key is held down, change ONLY this single corner. Otherwise change all 4!
         if (e.altKey) {
             setCornerRadius(activeCornerHandle, calculatedR);
         } else {
@@ -639,9 +660,17 @@ export const Canvas: React.FC = () => {
 
         // Real-time update of the shape points in the active keyframe if stroke is a shape
         if (ui.selectedStrokeId && ui.selectedKeyframeId) {
+            let stroke: Stroke | undefined;
             const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
             const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-            const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+            stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+            if (!stroke) {
+                for (const otherKf of project.keyframes) {
+                    const otherLs = otherKf.layerStates.find(s => s.layerId === ui.selectedLayerId);
+                    const s = otherLs?.strokes.find(st => st.id === ui.selectedStrokeId);
+                    if (s) { stroke = s; break; }
+                }
+            }
             if (stroke) {
                 const currentRadii = stroke.shapeConfig?.cornerRadii || ui.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
                 const newRadii = e.altKey 
@@ -718,12 +747,14 @@ export const Canvas: React.FC = () => {
             let dcx = 0; // delta center x in unrotated space
             let dcy = 0; // delta center y in unrotated space
 
-            if (!e.altKey) {
+            if (e.altKey) {
+                // Option/Alt key held: Symmetric resize anchored at center
                 if (activeHandle === 'br') { newW += dx * 2; newH += dy * 2; }
                 if (activeHandle === 'tl') { newW -= dx * 2; newH -= dy * 2; }
                 if (activeHandle === 'tr') { newW += dx * 2; newH -= dy * 2; }
                 if (activeHandle === 'bl') { newW -= dx * 2; newH += dy * 2; }
             } else {
+                // Default: Non-symmetric resize anchored at opposite corner
                 if (activeHandle === 'br') { newW += dx; newH += dy; dcx = dx / 2; dcy = dy / 2; }
                 if (activeHandle === 'tl') { newW -= dx; newH -= dy; dcx = dx / 2; dcy = dy / 2; }
                 if (activeHandle === 'tr') { newW += dx; newH -= dy; dcx = dx / 2; dcy = dy / 2; }
@@ -748,7 +779,7 @@ export const Canvas: React.FC = () => {
                 const snappedH = transformStart.height * snappedScaleY;
                 
                 // Adjust dcx and dcy based on the snapped width/height difference
-                if (e.altKey) {
+                if (!e.altKey) {
                     const diffW = snappedW - newW;
                     const diffH = snappedH - newH;
                     if (activeHandle === 'br') { dcx += diffW / 2; dcy += diffH / 2; }
@@ -763,7 +794,7 @@ export const Canvas: React.FC = () => {
             if (newW < 1) {
                 const diffW = 1 - newW;
                 newW = 1;
-                if (e.altKey) {
+                if (!e.altKey) {
                     if (activeHandle === 'br' || activeHandle === 'tr') dcx += diffW / 2;
                     if (activeHandle === 'tl' || activeHandle === 'bl') dcx -= diffW / 2;
                 }
@@ -771,7 +802,7 @@ export const Canvas: React.FC = () => {
             if (newH < 1) {
                 const diffH = 1 - newH;
                 newH = 1;
-                if (e.altKey) {
+                if (!e.altKey) {
                     if (activeHandle === 'br' || activeHandle === 'bl') dcy += diffH / 2;
                     if (activeHandle === 'tl' || activeHandle === 'tr') dcy -= diffH / 2;
                 }
@@ -851,7 +882,35 @@ export const Canvas: React.FC = () => {
             const rx = x * cos - y * sin; const ry = x * sin + y * cos;
             return { x: rx + transformStart.center.x + dX, y: ry + transformStart.center.y + dY, pressure: pt.pressure };
         });
-        updateStrokeInCurrentKeyframe(ui.selectedStrokeId, newPoints);
+
+        // Find existing stroke across keyframes if available
+        let stroke: Stroke | undefined;
+        if (ui.selectedKeyframeId) {
+            const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
+            const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
+            stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+        }
+        if (!stroke) {
+            for (const kf of project.keyframes) {
+                const ls = kf.layerStates.find(s => s.layerId === ui.selectedLayerId);
+                const s = ls?.strokes.find(st => st.id === ui.selectedStrokeId);
+                if (s) { stroke = s; break; }
+            }
+        }
+
+        let updatedShapeConfig: ShapeConfig | undefined = undefined;
+        if (stroke?.shapeConfig) {
+            updatedShapeConfig = {
+                ...stroke.shapeConfig,
+                minX: selectionBounds.cx - selectionBounds.width / 2,
+                minY: selectionBounds.cy - selectionBounds.height / 2,
+                width: selectionBounds.width,
+                height: selectionBounds.height,
+                rotation: selectionBounds.rotation
+            };
+        }
+
+        updateStrokeInCurrentKeyframe(ui.selectedStrokeId, newPoints, updatedShapeConfig);
     }
     
     if (interactionModeRef.current === 'drawing' && currentPointsRef.current.length > 1) {
