@@ -136,7 +136,7 @@ export const INITIAL_UI_STATE: UIState = {
   
   smoothingEnabled: true, // Smoothing toggle
   strokeSmoothingFactor: 0.2, // 0 to 1 (0 = Raw/Detailed points, 1 = Heavy smoothing)
-  onionSkinEnabled: true,
+  onionSkinEnabled: false,
   onionSkinOpacity: 0.15,
   onionSkinMode: 'both',
   inactiveLayerOpacity: 0.3,

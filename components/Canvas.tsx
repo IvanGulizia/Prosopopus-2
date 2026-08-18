@@ -630,26 +630,39 @@ export const Canvas: React.FC = () => {
         const maxR = Math.min(hw, hh);
 
         // Distance from corner outer vertex towards center (Figma-style drag)
+        // relX is between -hw and +hw, relY is between -hh and +hh
+        const relX = localP.x - cx;
+        const relY = localP.y - cy;
+
         let distFromOuter = 0;
         if (activeCornerHandle === 'topLeft') {
-            const dx = localP.x - (-hw);
-            const dy = localP.y - (-hh);
+            const dx = relX + hw;
+            const dy = relY + hh;
             distFromOuter = (dx + dy) / 2;
         } else if (activeCornerHandle === 'topRight') {
-            const dx = hw - localP.x;
-            const dy = localP.y - (-hh);
+            const dx = hw - relX;
+            const dy = relY + hh;
             distFromOuter = (dx + dy) / 2;
         } else if (activeCornerHandle === 'bottomRight') {
-            const dx = hw - localP.x;
-            const dy = hh - localP.y;
+            const dx = hw - relX;
+            const dy = hh - relY;
             distFromOuter = (dx + dy) / 2;
         } else if (activeCornerHandle === 'bottomLeft') {
-            const dx = localP.x - (-hw);
-            const dy = hh - localP.y;
+            const dx = relX + hw;
+            const dy = hh - relY;
             distFromOuter = (dx + dy) / 2;
         }
 
-        const calculatedR = Math.max(0, Math.min(maxR, Math.round(distFromOuter)));
+        // Smooth continuous mapping from outer edge (r=0) to max radius (r=maxR)
+        const minInset = Math.min(14, maxR * 0.4);
+        const startThreshold = minInset * 0.35;
+        let calculatedR = 0;
+        if (distFromOuter <= startThreshold) {
+            calculatedR = 0;
+        } else {
+            const t = Math.min(1, Math.max(0, (distFromOuter - startThreshold) / Math.max(1, maxR - startThreshold)));
+            calculatedR = Math.round(t * maxR);
+        }
 
         // If Alt/Option key is held down, change ONLY this single corner. Otherwise change all 4!
         if (e.altKey) {
@@ -840,15 +853,18 @@ export const Canvas: React.FC = () => {
         const endP = shapeDragStart.currentPoint;
         const minX = Math.min(startP.x, endP.x);
         const minY = Math.min(startP.y, endP.y);
-        let width = Math.abs(endP.x - startP.x);
-        let height = Math.abs(endP.y - startP.y);
+        const width = Math.abs(endP.x - startP.x);
+        const height = Math.abs(endP.y - startP.y);
+        const dragDist = Math.hypot(endP.x - startP.x, endP.y - startP.y);
 
-        // Enforce minimum dimension
-        if (width < 10 && height < 10) {
-            width = 100;
-            height = 100;
-        } else if (width < 5) width = 20;
-        else if (height < 5) height = 20;
+        // Require a minimum drag movement (at least 6px) to create or redraw a shape
+        const MIN_DRAG_THRESHOLD = 6;
+        if (dragDist < MIN_DRAG_THRESHOLD || (width < 6 && height < 6)) {
+            // User just clicked without moving -> cancel without creating a shape
+            setShapeDragStart(null);
+            setInteractionMode('none');
+            return;
+        }
 
         const shapeType = ui.shapeType || 'rectangle';
         const sides = ui.shapeSides || 5;
@@ -858,8 +874,8 @@ export const Canvas: React.FC = () => {
             type: shapeType,
             minX,
             minY,
-            width,
-            height,
+            width: Math.max(10, width),
+            height: Math.max(10, height),
             cornerRadii: shapeType === 'rectangle' ? cornerRadii : undefined,
             sides: shapeType === 'polygon' ? sides : undefined,
             rotation: 0
@@ -1211,6 +1227,17 @@ export const Canvas: React.FC = () => {
         });
 
         if (layerRelevantKeyframes.length === 0) return;
+
+        // In Edit Mode with a selected keyframe, only render the layer if this keyframe actually has strokes for this layer
+        if (currentUI.mode === 'edit' && currentUI.selectedKeyframeId) {
+            const currentKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
+            const currentLayerState = currentKf?.layerStates.find(s => s.layerId === layer.id);
+            const hasStrokeInCurrentKf = (currentLayerState?.strokes.length || 0) > 0;
+            if (!hasStrokeInCurrentKf) {
+                // This state does not have content for this layer. Do not render ghost/interpolated shapes from other states!
+                return;
+            }
+        }
 
         const allowExtrapolation = currentUI.overshootExtrapolationEnabled ?? true;
         const extrapolationFactor = currentUI.overshootExtrapolationFactor ?? 0.2;
