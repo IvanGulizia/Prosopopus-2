@@ -7,19 +7,29 @@ import { DebugMenu } from './components/DebugMenu';
 import { useStore } from './store/useStore';
 
 function App() {
-  const { closeAllPanels, ui, toggleDebugMenu } = useStore();
+  const { ui, setMode, toggleDebugMenu } = useStore();
   const { theme } = ui;
   
-  // Handle 'h' key for Debug Menu
+  // Handle Keyboard shortcuts: 'h' for Debug Menu, Space for Play/Edit mode toggle
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === 'h' && !['input', 'textarea'].includes(document.activeElement?.tagName.toLowerCase() || '')) {
+      const activeTag = document.activeElement?.tagName.toLowerCase() || '';
+      const isInput = ['input', 'textarea', 'select'].includes(activeTag) || (document.activeElement as HTMLElement)?.isContentEditable;
+      if (isInput) return;
+
+      if (e.key.toLowerCase() === 'h') {
         toggleDebugMenu();
+      }
+
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        const currentMode = useStore.getState().ui.mode;
+        setMode(currentMode === 'play' ? 'edit' : 'play');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleDebugMenu]);
+  }, [toggleDebugMenu, setMode]);
 
   // IMMERSION: Hide AxisMap in Play Mode, but keep Panels accessible
   const isEditMode = ui.mode === 'edit';
@@ -43,7 +53,6 @@ function App() {
         ['--canvas-bg' as any]: theme.canvasBg,
         ['--grid-color' as any]: theme.gridColor,
       }}
-      onClick={closeAllPanels} // Global click listener
     >
       <Canvas />
       <Toolbar />

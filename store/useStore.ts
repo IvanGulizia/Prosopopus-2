@@ -1623,7 +1623,7 @@ export const useStore = create<StoreState>((set, get) => ({
               strokes.push({
                 id: strokeId,
                 points: newPoints,
-                closed: baseStroke?.closed ?? true,
+                closed: baseStroke?.closed ?? false,
                 style: baseStroke?.style,
                 shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
               });
@@ -1641,7 +1641,7 @@ export const useStore = create<StoreState>((set, get) => ({
             strokes: [{
               id: strokeId,
               points: newPoints,
-              closed: baseStroke?.closed ?? true,
+              closed: baseStroke?.closed ?? false,
               style: baseStroke?.style,
               shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
             }]

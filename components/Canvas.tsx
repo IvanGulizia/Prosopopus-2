@@ -453,26 +453,30 @@ export const Canvas: React.FC = () => {
     }
 
     if (ui.selectedTool === 'select' || ui.selectedTool === 'shape') {
-        // First check corner handles if a shape with corner handles is selected
-        if (ui.selectedStrokeId && selectionBounds) {
+        // First check corner handles ONLY if a rectangle shape is selected and not in vertex mode
+        if (!isVertexMode && ui.selectedStrokeId && selectionBounds) {
             const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
             const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
             const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
-            const strokeRadii = stroke?.shapeConfig?.cornerRadii || stroke?.style?.cornerRadii || ui.cornerRadii;
-            const hitCorner = getCornerGizmoHit(p, selectionBounds, strokeRadii);
-            if (hitCorner) {
-                setInteractionMode('draggingCorner');
-                setActiveCornerHandle(hitCorner);
-                setTransformStart({
-                    mouse: p,
-                    center: { x: selectionBounds.cx, y: selectionBounds.cy },
-                    angle: selectionBounds.rotation,
-                    width: selectionBounds.width,
-                    height: selectionBounds.height,
-                    points: stroke ? stroke.points : []
-                });
-                (e.target as Element).setPointerCapture(e.pointerId);
-                return;
+            const isRectangleShape = stroke?.shapeConfig?.type === 'rectangle';
+            
+            if (isRectangleShape) {
+                const strokeRadii = stroke?.shapeConfig?.cornerRadii || stroke?.style?.cornerRadii || ui.cornerRadii;
+                const hitCorner = getCornerGizmoHit(p, selectionBounds, strokeRadii);
+                if (hitCorner) {
+                    setInteractionMode('draggingCorner');
+                    setActiveCornerHandle(hitCorner);
+                    setTransformStart({
+                        mouse: p,
+                        center: { x: selectionBounds.cx, y: selectionBounds.cy },
+                        angle: selectionBounds.rotation,
+                        width: selectionBounds.width,
+                        height: selectionBounds.height,
+                        points: stroke ? stroke.points : []
+                    });
+                    (e.target as Element).setPointerCapture(e.pointerId);
+                    return;
+                }
             }
         }
 
@@ -1637,29 +1641,33 @@ export const Canvas: React.FC = () => {
             ctx.fillStyle = '#3B82F6';
             ctx.fill();
 
-            // Render Figma-like inner Corner Handles
+            // Render Figma-like inner Corner Handles ONLY for Rectangle shapes
             const activeKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
             const activeLayerState = activeKf?.layerStates.find(ls => ls.layerId === currentUI.selectedLayerId);
             const activeStroke = activeLayerState?.strokes.find(s => s.id === currentUI.selectedStrokeId);
-            const strokeRadii = activeStroke?.shapeConfig?.cornerRadii || activeStroke?.style?.cornerRadii || currentUI.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
-            
-            // Calculate corner handles in local coordinates (unrotated)
-            const minX = -width / 2;
-            const minY = -height / 2;
-            const cornerHandles = getCornerHandlePositions(
-              { minX, minY, width, height, rotation: 0 },
-              strokeRadii
-            );
+            const isRectangleShape = activeStroke?.shapeConfig?.type === 'rectangle';
 
-            cornerHandles.forEach(ch => {
-              ctx.beginPath();
-              ctx.arc(ch.x, ch.y, 4.5, 0, Math.PI * 2);
-              ctx.fillStyle = '#FFFFFF';
-              ctx.fill();
-              ctx.lineWidth = 1.5;
-              ctx.strokeStyle = '#3B82F6';
-              ctx.stroke();
-            });
+            if (isRectangleShape) {
+              const strokeRadii = activeStroke?.shapeConfig?.cornerRadii || activeStroke?.style?.cornerRadii || currentUI.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
+              
+              // Calculate corner handles in local coordinates (unrotated)
+              const minX = -width / 2;
+              const minY = -height / 2;
+              const cornerHandles = getCornerHandlePositions(
+                { minX, minY, width, height, rotation: 0 },
+                strokeRadii
+              );
+
+              cornerHandles.forEach(ch => {
+                ctx.beginPath();
+                ctx.arc(ch.x, ch.y, 4.5, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fill();
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = '#3B82F6';
+                ctx.stroke();
+              });
+            }
 
             ctx.restore();
           }

@@ -766,72 +766,59 @@ export const drawRoundedRectangle = (
 };
 
 export const drawCornerRoundedPath = (ctx: CanvasRenderingContext2D, uniquePoints: Point[], roundness: number) => {
-    // 1. TOPOLOGY PRESERVATION:
-    // We do NOT filter points here based on distance. 
-    // We assume 'uniquePoints' coming from the interpolator has the correct number of vertices 
-    // needed for the animation state. Removing points here would cause "jumps".
+    // TOPOLOGY PRESERVATION:
+    // We assume 'uniquePoints' coming from the interpolator has the correct vertices.
     if (uniquePoints.length < 2) return;
 
     ctx.beginPath();
-    
-    // Always Open Logic
     ctx.moveTo(uniquePoints[0].x, uniquePoints[0].y);
 
-    const len = uniquePoints.length;
-    // Standard linear path traversal
-    const startIdx = 1;
-    const endIdx = len - 1;
+    if (uniquePoints.length === 2 || roundness <= 0) {
+        for (let i = 1; i < uniquePoints.length; i++) {
+            ctx.lineTo(uniquePoints[i].x, uniquePoints[i].y);
+        }
+        return;
+    }
 
-    for (let i = startIdx; i < endIdx; i++) {
+    const len = uniquePoints.length;
+    for (let i = 1; i < len - 1; i++) {
         const curr = uniquePoints[i];
-        
-        // No wrapping indices needed since we are strictly linear
-        const prev = uniquePoints[i-1];
-        const next = uniquePoints[i+1];
+        const prev = uniquePoints[i - 1];
+        const next = uniquePoints[i + 1];
         
         const len1 = distance(prev, curr);
         const len2 = distance(curr, next);
         
-        // 2. PHANTOM LINE & ZERO-LENGTH PROTECTION:
-        // If a segment is microscopic (e.g. overlapping points created by user for "pauses"),
-        // we MUST NOT attempt to round it, otherwise arcTo() math explodes and creates lines to infinity.
-        // We just draw a straight line to the point (which is visually effectively 0 length).
+        // Microscopic segment protection
         if (len1 < 0.1 || len2 < 0.1) {
             ctx.lineTo(curr.x, curr.y);
             continue;
         }
         
-        const v1x = curr.x - prev.x; const v1y = curr.y - prev.y;
-        const v2x = next.x - curr.x; const v2y = next.y - curr.y;
-        const n1x = v1x/len1; const n1y = v1y/len1;
-        const n2x = v2x/len2; const n2y = v2y/len2;
-        const dot = n1x * n2x + n1y * n2y;
+        const u1x = (prev.x - curr.x) / len1;
+        const u1y = (prev.y - curr.y) / len1;
+        const u2x = (next.x - curr.x) / len2;
+        const u2y = (next.y - curr.y) / len2;
         
-        // 3. COLLINEAR PROTECTION:
-        // If points are perfectly aligned, arcTo() radius becomes infinite.
-        if (dot > 0.99) {
-             ctx.lineTo(curr.x, curr.y);
-             continue;
-        }
+        // Tangent offset along each segment (at most 48% of segment length)
+        const maxT = Math.min(len1, len2) * 0.48;
+        const clampedRoundness = Math.min(100, Math.max(0, roundness));
+        const T = maxT * (clampedRoundness / 100);
         
-        const maxTangent = Math.min(len1, len2) * 0.5;
-        const currentTangent = maxTangent * (roundness / 100);
-        const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
-        const innerAngle = Math.PI - angle;
-        const radius = currentTangent * Math.tan(innerAngle / 2);
-        
-        // 4. RADIUS SAFETY:
-        // Ensure radius is valid and doesn't exceed geometric limits
-        if (radius < 0.05 || isNaN(radius)) {
-             ctx.lineTo(curr.x, curr.y);
-             continue;
+        if (T < 0.1) {
+            ctx.lineTo(curr.x, curr.y);
+            continue;
         }
 
-        ctx.arcTo(curr.x, curr.y, next.x, next.y, radius);
+        const pStart = { x: curr.x + u1x * T, y: curr.y + u1y * T };
+        const pEnd = { x: curr.x + u2x * T, y: curr.y + u2y * T };
+
+        ctx.lineTo(pStart.x, pStart.y);
+        ctx.quadraticCurveTo(curr.x, curr.y, pEnd.x, pEnd.y);
     }
 
-    // Always Open End
-    ctx.lineTo(uniquePoints[uniquePoints.length-1].x, uniquePoints[uniquePoints.length-1].y);
+    // Always Open End (no closePath)
+    ctx.lineTo(uniquePoints[len - 1].x, uniquePoints[len - 1].y);
 };
 
 export const drawCatmullRomSpline = (ctx: CanvasRenderingContext2D, points: Point[], tension: number = 0.5) => {
