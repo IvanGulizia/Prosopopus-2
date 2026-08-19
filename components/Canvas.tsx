@@ -1235,6 +1235,88 @@ export const Canvas: React.FC = () => {
           if (currentUI.inactiveLayerMode === 'hidden') return;
         }
 
+        let layerGlobalAlpha = layer.opacity;
+        let isInactiveWireframe = false;
+
+        if (!isLayerActive && currentUI.mode !== 'play') {
+          if (currentUI.inactiveLayerMode === 'wireframe') {
+            isInactiveWireframe = true;
+            layerGlobalAlpha *= (currentUI.inactiveLayerOpacity ?? 0.3);
+          } else if (currentUI.inactiveLayerMode === 'normal') {
+            layerGlobalAlpha = layer.opacity;
+          } else {
+            // 'dimmed' (default)
+            layerGlobalAlpha *= (currentUI.inactiveLayerOpacity ?? 0.3);
+          }
+        }
+
+        if (isLayerActive) {
+          if (isActivelyDrawingOnThisLayer) {
+            // Dim existing stroke while redrawing new stroke over it
+            layerGlobalAlpha *= (currentUI.redrawGhostOpacity ?? 0.25);
+          } else if (isCreatingNewState && currentUI.mode === 'edit') {
+            layerGlobalAlpha *= (currentUI.ghostStrokeOpacity ?? 0.4);
+          }
+        }
+
+        if (layer.isGuide) {
+          // Guide / Reference Layer: render all its freehand strokes directly without state interpolation
+          const guideStrokes = (layer.guideStrokes && layer.guideStrokes.length > 0)
+            ? layer.guideStrokes
+            : (currentProject.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
+
+          guideStrokes.forEach(s => {
+            if (!s.points || s.points.length === 0) return;
+            const resolvedStyle = resolveStrokeStyle(s, layer);
+            let sFill = isInactiveWireframe ? 'none' : resolvedStyle.fillColor;
+            let sColor = resolvedStyle.strokeColor;
+            let sWidth = isInactiveWireframe ? 1 : resolvedStyle.strokeWidth;
+            const rRoundness = resolvedStyle.cornerRoundness ?? 0;
+            const rRadii = resolvedStyle.cornerRadii;
+            const isRectangleShape = s.shapeConfig?.type === 'rectangle';
+
+            if (layer.interpolationMode === 'spline') {
+              drawCatmullRomSpline(ctx, s.points, 0.5);
+            } else if (isRectangleShape && (rRadii || rRoundness > 0)) {
+              drawRoundedRectangle(ctx, s.points, rRadii, rRoundness);
+            } else {
+              ctx.beginPath();
+              if (rRoundness > 0) {
+                drawCornerRoundedPath(ctx, s.points, rRoundness);
+              } else {
+                ctx.moveTo(s.points[0].x, s.points[0].y);
+                for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+              }
+            }
+
+            ctx.globalAlpha = layerGlobalAlpha;
+            switch(layer.blendMode) {
+              case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+              case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+              case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+              case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+              case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+              default: ctx.globalCompositeOperation = 'source-over';
+            }
+
+            if (sFill && sFill !== 'none') {
+              ctx.fillStyle = sFill;
+              ctx.fill();
+            }
+            if (sColor && sColor !== 'none') {
+              ctx.lineCap = currentUI.strokeCap || 'round';
+              ctx.lineJoin = 'round';
+              ctx.strokeStyle = sColor;
+              ctx.lineWidth = sWidth;
+              ctx.stroke();
+            }
+          });
+
+          ctx.globalAlpha = 1.0;
+          ctx.globalCompositeOperation = 'source-over';
+          return;
+        }
+
         const layerRelevantKeyframes = currentProject.keyframes.filter(kf => {
             const ls = kf.layerStates.find(s => s.layerId === layer.id);
             return ls && ls.strokes.length > 0;
@@ -1271,30 +1353,6 @@ export const Canvas: React.FC = () => {
              .filter(k => Math.abs(k.weight) > 0.0001);
 
         const strokeId = `stroke-${layer.id}-unique`;
-
-        let layerGlobalAlpha = layer.opacity;
-        let isInactiveWireframe = false;
-
-        if (!isLayerActive && currentUI.mode !== 'play') {
-          if (currentUI.inactiveLayerMode === 'wireframe') {
-            isInactiveWireframe = true;
-            layerGlobalAlpha *= (currentUI.inactiveLayerOpacity ?? 0.3);
-          } else if (currentUI.inactiveLayerMode === 'normal') {
-            layerGlobalAlpha = layer.opacity;
-          } else {
-            // 'dimmed' (default)
-            layerGlobalAlpha *= (currentUI.inactiveLayerOpacity ?? 0.3);
-          }
-        }
-
-        if (isLayerActive) {
-          if (isActivelyDrawingOnThisLayer) {
-            // Dim existing stroke while redrawing new stroke over it
-            layerGlobalAlpha *= (currentUI.redrawGhostOpacity ?? 0.25);
-          } else if (isCreatingNewState && currentUI.mode === 'edit') {
-            layerGlobalAlpha *= (currentUI.ghostStrokeOpacity ?? 0.4);
-          }
-        }
 
         const strokeData = activeKeyframes.map(kf => {
             const state = kf.layerStates.find(ls => ls.layerId === layer.id);
@@ -1698,6 +1756,43 @@ export const Canvas: React.FC = () => {
           }
       }
 
+      // Render custom dot/shape cursor if configured and in play mode
+      const playCursorPos = mousePosRef.current;
+      if (currentUI.mode === 'play' && currentUI.playModeCursor === 'dot' && playCursorPos) {
+          ctx.save();
+          const cursorShape = currentUI.playModeCursorShape || 'circle';
+          const cursorSize = currentUI.playModeCursorSize ?? 4;
+          const cursorColor = currentUI.playModeCursorColor || '#000000';
+          const cx = playCursorPos.x;
+          const cy = playCursorPos.y;
+
+          ctx.fillStyle = cursorColor;
+          ctx.strokeStyle = cursorColor;
+
+          if (cursorShape === 'circle') {
+              ctx.beginPath();
+              ctx.arc(cx, cy, Math.max(0.5, cursorSize / 2), 0, Math.PI * 2);
+              ctx.fill();
+          } else if (cursorShape === 'square') {
+              ctx.fillRect(cx - cursorSize / 2, cy - cursorSize / 2, cursorSize, cursorSize);
+          } else if (cursorShape === 'ring') {
+              ctx.lineWidth = Math.max(1, cursorSize <= 6 ? 1 : 1.5);
+              ctx.beginPath();
+              ctx.arc(cx, cy, Math.max(1, cursorSize / 2), 0, Math.PI * 2);
+              ctx.stroke();
+          } else if (cursorShape === 'cross') {
+              const arm = Math.max(2, cursorSize / 2);
+              ctx.lineWidth = Math.max(1, cursorSize <= 6 ? 1 : 1.5);
+              ctx.beginPath();
+              ctx.moveTo(cx - arm, cy);
+              ctx.lineTo(cx + arm, cy);
+              ctx.moveTo(cx, cy - arm);
+              ctx.lineTo(cx, cy + arm);
+              ctx.stroke();
+          }
+          ctx.restore();
+      }
+
       animationFrameId = requestAnimationFrame(render);
     };
 
@@ -1721,7 +1816,7 @@ export const Canvas: React.FC = () => {
       >
           <canvas 
             ref={canvasRef} 
-            className={`block w-full h-full ${ui.mode === 'play' ? 'cursor-move' : (ui.selectedTool === 'select' ? 'cursor-default' : 'cursor-crosshair')}`}
+            className={`block w-full h-full ${ui.mode === 'play' ? (ui.playModeCursor === 'none' || ui.playModeCursor === 'dot' ? 'cursor-none' : (ui.playModeCursor === 'crosshair' ? 'cursor-crosshair' : 'cursor-default')) : (ui.selectedTool === 'select' ? 'cursor-default' : 'cursor-crosshair')}`}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}

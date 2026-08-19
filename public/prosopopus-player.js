@@ -546,6 +546,12 @@ export class ProsopopusPlayer {
     this.ctx = ctx;
     this.project = project;
 
+    const settings = project.settings || {};
+    const cursorType = settings.playModeCursor || 'default';
+    if (cursorType === 'crosshair') canvas.style.cursor = 'crosshair';
+    else if (cursorType === 'none' || cursorType === 'dot') canvas.style.cursor = 'none';
+    else canvas.style.cursor = 'default';
+
     const axisX = project.axes?.find(a => a.id === 'axis-x');
     const axisY = project.axes?.find(a => a.id === 'axis-y');
     const initX = axisX ? axisX.currentValue : 0.5;
@@ -569,6 +575,11 @@ export class ProsopopusPlayer {
   setProject(project) {
     this.project = project;
     this.vertexInertiaMap.clear();
+    const settings = project.settings || {};
+    const cursorType = settings.playModeCursor || 'default';
+    if (cursorType === 'crosshair') this.canvas.style.cursor = 'crosshair';
+    else if (cursorType === 'none' || cursorType === 'dot') this.canvas.style.cursor = 'none';
+    else this.canvas.style.cursor = 'default';
   }
 
   setupInteraction() {
@@ -783,6 +794,37 @@ export class ProsopopusPlayer {
     project.layers.forEach(layer => {
       if (!layer.visible) return;
 
+      if (layer.isGuide) {
+        // Guide / Reference layer: Render all strokes directly without interpolation
+        const guideStrokes = (layer.guideStrokes && layer.guideStrokes.length > 0)
+          ? layer.guideStrokes
+          : (project.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
+
+        guideStrokes.forEach(s => {
+          if (!s || !s.points || s.points.length === 0) return;
+          const resolved = resolveStrokeStyle(s, layer);
+          ctx.beginPath();
+          ctx.moveTo(s.points[0].x, s.points[0].y);
+          for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+          if (s.closed) ctx.closePath();
+
+          ctx.globalAlpha = layer.opacity;
+          if (resolved.fillColor && resolved.fillColor !== 'none') {
+            ctx.fillStyle = resolved.fillColor;
+            ctx.fill();
+          }
+          if (resolved.strokeColor && resolved.strokeColor !== 'none') {
+            ctx.lineCap = settings.strokeCap || 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = resolved.strokeColor;
+            ctx.lineWidth = resolved.strokeWidth;
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1.0;
+        });
+        return;
+      }
+
       const layerRelevantKeyframes = project.keyframes.filter(kf => {
         const ls = kf.layerStates.find(s => s.layerId === layer.id);
         return ls && ls.strokes.length > 0;
@@ -956,5 +998,41 @@ export class ProsopopusPlayer {
         ctx.globalCompositeOperation = 'source-over';
       }
     });
+
+    // Render custom dot/shape cursor if configured
+    if (settings.playModeCursor === 'dot' && this.lastPointerPos) {
+      const px = this.lastPointerPos.x * w;
+      const py = this.lastPointerPos.y * h;
+      const shape = settings.playModeCursorShape || 'circle';
+      const size = settings.playModeCursorSize ?? 4;
+      const color = settings.playModeCursorColor || '#000000';
+
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+
+      if (shape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(0.5, size / 2), 0, Math.PI * 2);
+        ctx.fill();
+      } else if (shape === 'square') {
+        ctx.fillRect(px - size / 2, py - size / 2, size, size);
+      } else if (shape === 'ring') {
+        ctx.lineWidth = Math.max(1, size <= 6 ? 1 : 1.5);
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(1, size / 2), 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (shape === 'cross') {
+        const arm = Math.max(2, size / 2);
+        ctx.lineWidth = Math.max(1, size <= 6 ? 1 : 1.5);
+        ctx.beginPath();
+        ctx.moveTo(px - arm, py);
+        ctx.lineTo(px + arm, py);
+        ctx.moveTo(px, py - arm);
+        ctx.lineTo(px, py + arm);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 }

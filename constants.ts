@@ -102,6 +102,10 @@ export const INITIAL_UI_STATE: UIState = {
   snapToGrid: false,
   snapScale: 1,
   strokeCap: 'round',
+  playModeCursor: 'default',
+  playModeCursorShape: 'circle',
+  playModeCursorSize: 4,
+  playModeCursorColor: '#000000',
   
   snapPlayMode: false,
   snapMatrixGrid: true, 

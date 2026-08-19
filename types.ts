@@ -78,6 +78,8 @@ export interface Layer {
   interpolationMode: InterpolationMode; // Per-layer setting
   baseStyle?: StyleProps; // The default style for strokes in this layer
   symmetry?: LayerSymmetryConfig;
+  isGuide?: boolean; // Calque Repère: freehand multi-stroke drawing without state interpolation
+  guideStrokes?: Stroke[]; // Stored strokes for the guide layer
 }
 
 // --- Axes & Keyframes (The Interpolation Engine) ---
@@ -129,6 +131,8 @@ export type SymmetryType = 'vertical' | 'horizontal' | 'quad' | 'radial';
 export type SymmetryTarget = 'merge' | 'layer';
 export type OnionSkinMode = 'wireframe' | 'styled' | 'both';
 export type InactiveLayerMode = 'dimmed' | 'wireframe' | 'normal' | 'hidden';
+export type PlayModeCursorType = 'default' | 'dot' | 'crosshair' | 'none';
+export type PlayModeCursorShape = 'circle' | 'square' | 'cross' | 'ring';
 
 export interface Theme {
   bgApp: string;
@@ -169,6 +173,10 @@ export interface UIState {
   snapToGrid: boolean; // Drawing Snap
   snapScale: number; // Snap Scale multiplier
   strokeCap: 'round' | 'butt' | 'square'; // Stroke linecap
+  playModeCursor: PlayModeCursorType;
+  playModeCursorShape: PlayModeCursorShape;
+  playModeCursorSize: number;
+  playModeCursorColor: string;
   
   // Matrix Helpers
   snapPlayMode: boolean; // Snap Cursor in Matrix

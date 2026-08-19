@@ -2,7 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { Layers, Settings, Plus, Trash2, Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { BlendMode, InterpolationMode, Theme } from '../types';
+import { BlendMode, InterpolationMode, Theme, PlayModeCursorType, PlayModeCursorShape } from '../types';
 import { PALETTE_COLORS } from '../constants';
 
 export const LayerPanel: React.FC = () => {
@@ -185,6 +185,16 @@ export const LayerPanel: React.FC = () => {
             
             {/* Quick Actions */}
             <div className="flex gap-1.5 items-center">
+                 {/* Guide Layer Indicator */}
+                 {layer.isGuide && (
+                   <span 
+                      className="h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border text-amber-700 bg-amber-50 border-amber-200 flex items-center gap-0.5"
+                      title="Calque Repère (Dessin libre sans interpolation)"
+                   >
+                      REP
+                   </span>
+                 )}
+
                  {/* Symmetry indicator and toggle */}
                  {layer.symmetry?.enabled && (
                    <button 
@@ -319,7 +329,8 @@ export const SettingsPanel: React.FC = () => {
       toggleOvershootExtrapolation, setOvershootExtrapolationFactor,
       toggleOvershootVertexInertia, setOvershootVertexInertiaFactor, setOvershootVertexDamping, setOvershootVertexMass,
       toggleOvershootExaggeration, setOvershootExaggerationFactor,
-      setLayerCornerRoundness, setStrokeCap,
+      setLayerCornerRoundness, setStrokeCap, setPlayModeCursor,
+      setPlayModeCursorShape, setPlayModeCursorSize, setPlayModeCursorColor, toggleLayerGuideMode,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
       updateCanvasSize, renameProject, setStrokeResolution,
       setStrokeSmoothingFactor,
@@ -329,7 +340,7 @@ export const SettingsPanel: React.FC = () => {
   
   const { theme, isSettingsOpen } = ui;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [openSections, setOpenSections] = useState<string[]>([]);
+  const [openSections, setOpenSections] = useState<string[]>(['cursor', 'layer-styles']);
   const [applyToAllStates, setApplyToAllStates] = useState(false);
   const [embedJsonUrl, setEmbedJsonUrl] = useState('');
 
@@ -416,7 +427,11 @@ export const SettingsPanel: React.FC = () => {
               symmetryAxisY: ui.symmetryAxisY,
               symmetryRadialCount: ui.symmetryRadialCount,
               symmetryTarget: ui.symmetryTarget,
-              showSymmetryAxis: ui.showSymmetryAxis
+              showSymmetryAxis: ui.showSymmetryAxis,
+              playModeCursor: ui.playModeCursor,
+              playModeCursorShape: ui.playModeCursorShape,
+              playModeCursorSize: ui.playModeCursorSize,
+              playModeCursorColor: ui.playModeCursorColor
           }
       };
       const data = JSON.stringify(projectWithSettings, null, 2);
@@ -478,39 +493,77 @@ export const SettingsPanel: React.FC = () => {
         >
              <div className="space-y-3">
                  <SettingsRow label="Stroke Color">
-                     <div className="grid grid-cols-8 gap-1.5 w-full">
-                         {PALETTE_COLORS.map(c => (
-                             <button 
-                                 key={c} 
-                                 onClick={() => ui.selectedLayerId && updateLayerStrokeColor(ui.selectedLayerId, c)}
-                                 className="w-6 h-6 rounded-full border relative group overflow-hidden transition-transform hover:scale-110"
-                                 style={{ 
-                                   backgroundColor: c === 'none' ? '#FFFFFF' : c,
-                                   borderColor: theme.border,
-                                   boxShadow: (currentLayer?.baseStyle?.strokeColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
-                                 }}
-                             >
-                               {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
-                             </button>
-                         ))}
+                     <div className="flex items-center gap-2 w-full">
+                         <div className="grid grid-cols-8 gap-1.5 flex-1">
+                             {PALETTE_COLORS.map(c => (
+                                 <button 
+                                     key={c} 
+                                     onClick={() => ui.selectedLayerId && updateLayerStrokeColor(ui.selectedLayerId, c)}
+                                     className="w-6 h-6 rounded-full border relative group overflow-hidden transition-transform hover:scale-110"
+                                     style={{ 
+                                       backgroundColor: c === 'none' ? '#FFFFFF' : c,
+                                       borderColor: theme.border,
+                                       boxShadow: (currentLayer?.baseStyle?.strokeColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
+                                     }}
+                                 >
+                                   {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
+                                 </button>
+                             ))}
+                         </div>
+                         {/* Rainbow Precise Color Picker */}
+                         <div 
+                             className="w-7 h-7 rounded-full border relative overflow-hidden shrink-0 cursor-pointer hover:scale-110 transition-transform shadow-sm flex items-center justify-center"
+                             style={{ 
+                                 background: 'conic-gradient(from 0deg, red, yellow, lime, cyan, blue, magenta, red)',
+                                 borderColor: theme.border,
+                                 boxShadow: !PALETTE_COLORS.includes(currentLayer?.baseStyle?.strokeColor || '') && (currentLayer?.baseStyle?.strokeColor || 'none') !== 'none' ? `0 0 0 2px ${theme.accent}` : 'none'
+                             }}
+                             title="Custom precise color"
+                         >
+                             <input 
+                                 type="color" 
+                                 value={currentLayer?.baseStyle?.strokeColor && currentLayer.baseStyle.strokeColor !== 'none' ? currentLayer.baseStyle.strokeColor : '#3B82F6'}
+                                 onChange={(e) => ui.selectedLayerId && updateLayerStrokeColor(ui.selectedLayerId, e.target.value)}
+                                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                             />
+                         </div>
                      </div>
                  </SettingsRow>
                  <SettingsRow label="Fill Color">
-                     <div className="grid grid-cols-8 gap-1.5 w-full">
-                         {PALETTE_COLORS.map(c => (
-                             <button 
-                                 key={c} 
-                                 onClick={() => ui.selectedLayerId && updateLayerFillColor(ui.selectedLayerId, c)}
-                                 className="w-6 h-6 rounded-full border relative group overflow-hidden transition-transform hover:scale-110"
-                                 style={{ 
-                                   backgroundColor: c === 'none' ? '#FFFFFF' : c,
-                                   borderColor: theme.border,
-                                   boxShadow: (currentLayer?.baseStyle?.fillColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
-                                 }}
-                             >
-                               {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
-                             </button>
-                         ))}
+                     <div className="flex items-center gap-2 w-full">
+                         <div className="grid grid-cols-8 gap-1.5 flex-1">
+                             {PALETTE_COLORS.map(c => (
+                                 <button 
+                                     key={c} 
+                                     onClick={() => ui.selectedLayerId && updateLayerFillColor(ui.selectedLayerId, c)}
+                                     className="w-6 h-6 rounded-full border relative group overflow-hidden transition-transform hover:scale-110"
+                                     style={{ 
+                                       backgroundColor: c === 'none' ? '#FFFFFF' : c,
+                                       borderColor: theme.border,
+                                       boxShadow: (currentLayer?.baseStyle?.fillColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
+                                     }}
+                                 >
+                                   {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
+                                 </button>
+                             ))}
+                         </div>
+                         {/* Rainbow Precise Color Picker */}
+                         <div 
+                             className="w-7 h-7 rounded-full border relative overflow-hidden shrink-0 cursor-pointer hover:scale-110 transition-transform shadow-sm flex items-center justify-center"
+                             style={{ 
+                                 background: 'conic-gradient(from 0deg, red, yellow, lime, cyan, blue, magenta, red)',
+                                 borderColor: theme.border,
+                                 boxShadow: !PALETTE_COLORS.includes(currentLayer?.baseStyle?.fillColor || '') && (currentLayer?.baseStyle?.fillColor || 'none') !== 'none' ? `0 0 0 2px ${theme.accent}` : 'none'
+                             }}
+                             title="Custom precise color"
+                         >
+                             <input 
+                                 type="color" 
+                                 value={currentLayer?.baseStyle?.fillColor && currentLayer.baseStyle.fillColor !== 'none' ? currentLayer.baseStyle.fillColor : '#3B82F6'}
+                                 onChange={(e) => ui.selectedLayerId && updateLayerFillColor(ui.selectedLayerId, e.target.value)}
+                                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                             />
+                         </div>
                      </div>
                  </SettingsRow>
                  <SettingsRow label="Stroke Width" value={`${ui.brushSize}px`}>
@@ -572,6 +625,28 @@ export const SettingsPanel: React.FC = () => {
                         )}
                      </div>
                 </div>
+            </div>
+
+            {/* GUIDE / REFERENCE LAYER MODE TOGGLE */}
+            <div className="bg-amber-50/60 rounded-xl p-3 border border-amber-200/70 space-y-2.5">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <span className="text-xs font-bold text-amber-900 block">Mode Repère (Guide Layer)</span>
+                        <span className="text-[10px] text-amber-700/80">Dessin libre multi-traits sans interpolation</span>
+                    </div>
+                    <input 
+                        type="checkbox" 
+                        checked={currentLayer?.isGuide === true} 
+                        onChange={() => ui.selectedLayerId && toggleLayerGuideMode(ui.selectedLayerId)}
+                        disabled={!ui.selectedLayerId}
+                        className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                </div>
+                {currentLayer?.isGuide && (
+                    <p className="text-[10px] text-amber-800 font-medium bg-amber-100/60 rounded-lg p-2 leading-relaxed">
+                        Ce calque est en mode repère : vous pouvez dessiner librement plusieurs tracés. Ils resteront visibles sur tous les états comme repères fixes sans être interpolés.
+                    </p>
+                )}
             </div>
 
             <div className="space-y-3 pt-2">
@@ -1032,7 +1107,11 @@ export const SettingsPanel: React.FC = () => {
                                         symmetryAxisY: ui.symmetryAxisY,
                                         symmetryRadialCount: ui.symmetryRadialCount,
                                         symmetryTarget: ui.symmetryTarget,
-                                        showSymmetryAxis: ui.showSymmetryAxis
+                                        showSymmetryAxis: ui.showSymmetryAxis,
+                                        playModeCursor: ui.playModeCursor,
+                                        playModeCursorShape: ui.playModeCursorShape,
+                                        playModeCursorSize: ui.playModeCursorSize,
+                                        playModeCursorColor: ui.playModeCursorColor
                                     }
                                 };
                                 navigator.clipboard.writeText(JSON.stringify(projectWithSettings, null, 2));
@@ -1263,6 +1342,103 @@ export const SettingsPanel: React.FC = () => {
                 <SettingsRow label="Max Points (Resolution)" value={`${ui.strokeResolution} pts`}>
                     <input type="range" min="10" max="1000" step="10" value={ui.strokeResolution} onChange={(e) => setStrokeResolution(parseInt(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                 </SettingsRow>
+             </div>
+        </SettingsSection>
+
+        {/* SECTION: PLAY MODE CURSOR */}
+        <SettingsSection 
+            title="Play Mode Cursor" 
+            isOpen={openSections.includes('cursor')}
+            onToggle={() => toggleSection('cursor')}
+            theme={theme}
+        >
+             <div className="space-y-4">
+                 <div>
+                     <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2 block">Cursor Type</label>
+                     <div className="grid grid-cols-4 gap-1.5 bg-gray-50 rounded-xl p-1.5 border border-gray-200">
+                         {(['default', 'crosshair', 'dot', 'none'] as PlayModeCursorType[]).map((c) => (
+                             <button
+                                 key={c}
+                                 onClick={() => setPlayModeCursor(c)}
+                                 className={`py-2 text-[11px] font-bold rounded-lg capitalize transition-all ${ui.playModeCursor === c ? 'bg-blue-600 shadow text-white' : 'text-gray-600 hover:text-gray-900 bg-white border border-gray-100'}`}
+                             >
+                                 {c === 'none' ? 'Hidden' : c}
+                             </button>
+                         ))}
+                     </div>
+                     <p className="text-[10px] text-gray-400 mt-1.5">Style du pointeur lors des interactions en mode Play.</p>
+                 </div>
+
+                 {ui.playModeCursor === 'dot' && (
+                     <div className="bg-blue-50/40 rounded-xl p-3 border border-blue-100 space-y-3.5">
+                         <div>
+                             <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5 block">Forme du Point (Shape)</label>
+                             <div className="grid grid-cols-4 gap-1 bg-white/80 rounded-xl p-1 border border-blue-100">
+                                 {[
+                                     { id: 'circle', label: 'Cercle' },
+                                     { id: 'square', label: 'Carré' },
+                                     { id: 'ring', label: 'Anneau' },
+                                     { id: 'cross', label: 'Croix' }
+                                 ].map((sh) => (
+                                     <button
+                                         key={sh.id}
+                                         onClick={() => setPlayModeCursorShape(sh.id as PlayModeCursorShape)}
+                                         className={`py-1.5 text-[10px] font-bold rounded-lg transition-all ${ui.playModeCursorShape === sh.id ? 'bg-blue-600 shadow text-white' : 'text-gray-600 hover:text-gray-900'}`}
+                                     >
+                                         {sh.label}
+                                     </button>
+                                 ))}
+                             </div>
+                         </div>
+
+                         <SettingsRow label="Taille (Size)" value={`${ui.playModeCursorSize ?? 4}px`}>
+                             <input 
+                                 type="range" 
+                                 min="1" 
+                                 max="32" 
+                                 step="1" 
+                                 value={ui.playModeCursorSize ?? 4} 
+                                 onChange={(e) => setPlayModeCursorSize(parseInt(e.target.value))} 
+                                 className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"
+                             />
+                         </SettingsRow>
+
+                         <SettingsRow label="Couleur (Color)">
+                             <div className="flex items-center gap-2 w-full">
+                                 <div className="grid grid-cols-6 gap-1.5 flex-1">
+                                     {['#000000', '#FFFFFF', '#3B82F6', '#EF4444', '#10B981', '#F59E0B'].map(c => (
+                                         <button 
+                                             key={c} 
+                                             onClick={() => setPlayModeCursorColor(c)}
+                                             className="w-6 h-6 rounded-full border relative overflow-hidden transition-transform hover:scale-110 shadow-xs"
+                                             style={{ 
+                                                 backgroundColor: c,
+                                                 borderColor: '#D1D5DB',
+                                                 boxShadow: (ui.playModeCursorColor ?? '#000000').toLowerCase() === c.toLowerCase() ? `0 0 0 2px ${theme.accent}` : 'none'
+                                             }}
+                                         />
+                                     ))}
+                                 </div>
+                                 <div 
+                                     className="w-7 h-7 rounded-full border relative overflow-hidden shrink-0 cursor-pointer hover:scale-110 transition-transform shadow-sm flex items-center justify-center"
+                                     style={{ 
+                                         background: 'conic-gradient(from 0deg, red, yellow, lime, cyan, blue, magenta, red)',
+                                         borderColor: theme.border,
+                                         boxShadow: !['#000000', '#FFFFFF', '#3B82F6', '#EF4444', '#10B981', '#F59E0B'].includes(ui.playModeCursorColor ?? '#000000') ? `0 0 0 2px ${theme.accent}` : 'none'
+                                     }}
+                                     title="Couleur précise personnalisée"
+                                 >
+                                     <input 
+                                         type="color" 
+                                         value={ui.playModeCursorColor && ui.playModeCursorColor !== 'none' ? ui.playModeCursorColor : '#000000'}
+                                         onChange={(e) => setPlayModeCursorColor(e.target.value)}
+                                         className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                     />
+                                 </div>
+                             </div>
+                         </SettingsRow>
+                     </div>
+                 )}
              </div>
         </SettingsSection>
 

@@ -1,6 +1,6 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, CornerRadii, ShapeType, ShapeConfig } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME } from '../constants';
 import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour, generateShapePoints } from '../utils/math';
 
@@ -47,6 +47,10 @@ interface StoreState {
   toggleSnapToGrid: () => void;
   setSnapScale: (scale: number) => void;
   setStrokeCap: (cap: 'round' | 'butt' | 'square') => void;
+  setPlayModeCursor: (cursor: PlayModeCursorType) => void;
+  setPlayModeCursorShape: (shape: PlayModeCursorShape) => void;
+  setPlayModeCursorSize: (size: number) => void;
+  setPlayModeCursorColor: (color: string) => void;
   
   toggleSnapPlayMode: () => void;
   toggleSnapMatrixGrid: () => void;
@@ -118,6 +122,7 @@ interface StoreState {
   reorderLayers: (fromIndex: number, toIndex: number) => void;
   toggleLayerVisibility: (layerId: string) => void;
   toggleLayerLock: (layerId: string) => void;
+  toggleLayerGuideMode: (layerId: string) => void;
   setLayerBlendMode: (layerId: string, mode: BlendMode) => void;
   setLayerInterpolationMode: (layerId: string, mode: InterpolationMode) => void;
   setLayerCornerRoundness: (layerId: string, roundness: number, applyToAllStates?: boolean) => void;
@@ -635,6 +640,10 @@ export const useStore = create<StoreState>((set, get) => ({
   toggleSnapToGrid: () => set((state) => ({ ui: { ...state.ui, snapToGrid: !state.ui.snapToGrid } })),
   setSnapScale: (scale) => set((state) => ({ ui: { ...state.ui, snapScale: scale } })),
   setStrokeCap: (cap) => set((state) => ({ ui: { ...state.ui, strokeCap: cap } })),
+  setPlayModeCursor: (cursor) => set((state) => ({ ui: { ...state.ui, playModeCursor: cursor } })),
+  setPlayModeCursorShape: (shape) => set((state) => ({ ui: { ...state.ui, playModeCursorShape: shape } })),
+  setPlayModeCursorSize: (size) => set((state) => ({ ui: { ...state.ui, playModeCursorSize: size } })),
+  setPlayModeCursorColor: (color) => set((state) => ({ ui: { ...state.ui, playModeCursorColor: color } })),
   
   toggleSnapPlayMode: () => set((state) => ({ ui: { ...state.ui, snapPlayMode: !state.ui.snapPlayMode } })),
   toggleSnapMatrixGrid: () => set((state) => ({ ui: { ...state.ui, snapMatrixGrid: !state.ui.snapMatrixGrid } })),
@@ -826,7 +835,11 @@ export const useStore = create<StoreState>((set, get) => ({
       targetKeyframeId = newKfId;
     }
 
-    const strokeId = `stroke-${selectedLayerId}-unique`;
+    const isGuideLayer = layer?.isGuide === true;
+    const strokeId = isGuideLayer 
+      ? `guide-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+      : `stroke-${selectedLayerId}-unique`;
+
     const newStroke: Stroke = {
       id: strokeId,
       points,
@@ -835,14 +848,27 @@ export const useStore = create<StoreState>((set, get) => ({
       shapeConfig: config
     };
 
-    const newKeyframes = keyframes.map(kf => {
-      if (kf.id === targetKeyframeId) {
-        let newLayerStates = [...kf.layerStates].filter(ls => !ls.layerId.includes('-sym-'));
+    let finalLayers = state.project.layers;
+    let newKeyframes: Keyframe[];
+
+    if (isGuideLayer) {
+      finalLayers = state.project.layers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            guideStrokes: [...(l.guideStrokes || []), newStroke]
+          };
+        }
+        return l;
+      });
+
+      newKeyframes = keyframes.map(kf => {
+        let newLayerStates = [...kf.layerStates];
         const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
         if (existingLayerStateIndex >= 0) {
           newLayerStates[existingLayerStateIndex] = {
             ...newLayerStates[existingLayerStateIndex],
-            strokes: [newStroke]
+            strokes: [...newLayerStates[existingLayerStateIndex].strokes, newStroke]
           };
         } else {
           newLayerStates.push({
@@ -851,12 +877,31 @@ export const useStore = create<StoreState>((set, get) => ({
           });
         }
         return { ...kf, layerStates: newLayerStates };
-      }
-      return kf;
-    });
+      });
+    } else {
+      newKeyframes = keyframes.map(kf => {
+        if (kf.id === targetKeyframeId) {
+          let newLayerStates = [...kf.layerStates].filter(ls => !ls.layerId.includes('-sym-'));
+          const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+          if (existingLayerStateIndex >= 0) {
+            newLayerStates[existingLayerStateIndex] = {
+              ...newLayerStates[existingLayerStateIndex],
+              strokes: [newStroke]
+            };
+          } else {
+            newLayerStates.push({
+              layerId: selectedLayerId,
+              strokes: [newStroke]
+            });
+          }
+          return { ...kf, layerStates: newLayerStates };
+        }
+        return kf;
+      });
+    }
 
     return {
-      project: { ...state.project, keyframes: newKeyframes },
+      project: { ...state.project, layers: finalLayers, keyframes: newKeyframes },
       ui: { 
         ...state.ui, 
         selectedKeyframeId: targetKeyframeId,
@@ -1299,6 +1344,40 @@ export const useStore = create<StoreState>((set, get) => ({
     }
   })),
 
+  toggleLayerGuideMode: (layerId) => set((state) => {
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    if (!targetLayer) return state;
+
+    const newIsGuide = !targetLayer.isGuide;
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+    // If enabling guide mode, collect existing strokes from current keyframe / all keyframes into guideStrokes
+    let existingStrokes: Stroke[] = [];
+    if (newIsGuide) {
+      const kf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+      const ls = kf?.layerStates.find(s => s.layerId === layerId);
+      if (ls && ls.strokes.length > 0) {
+        existingStrokes = [...ls.strokes];
+      }
+    }
+
+    const updatedLayers = state.project.layers.map(l => {
+      if (l.id === layerId) {
+        return {
+          ...l,
+          isGuide: newIsGuide,
+          guideStrokes: newIsGuide ? (l.guideStrokes && l.guideStrokes.length > 0 ? l.guideStrokes : existingStrokes) : undefined
+        };
+      }
+      return l;
+    });
+
+    return {
+      project: { ...state.project, layers: updatedLayers },
+      history: { past, future: [] }
+    };
+  }),
+
   setLayerBlendMode: (layerId, mode) => set((state) => {
     return {
       project: {
@@ -1546,22 +1625,39 @@ export const useStore = create<StoreState>((set, get) => ({
       targetKeyframeId = newKfId;
     }
 
+    const isGuideLayer = layer?.isGuide === true;
+    const strokeId = isGuideLayer 
+      ? `guide-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+      : `stroke-${selectedLayerId}-unique`;
+
     const newStroke: Stroke = {
-      id: `stroke-${selectedLayerId}-unique`,
+      id: strokeId,
       points,
-      closed: false,
+      closed: closed ?? false,
       style: Object.keys(styleOverride).length > 0 ? styleOverride : undefined
     };
 
-    const newKeyframes = keyframes.map(kf => {
-      if (kf.id === targetKeyframeId) {
-        let newLayerStates = [...kf.layerStates].filter(ls => !ls.layerId.includes('-sym-'));
+    let finalLayers = updatedLayers;
+    let newKeyframes: Keyframe[];
 
+    if (isGuideLayer) {
+      finalLayers = updatedLayers.map(l => {
+        if (l.id === selectedLayerId) {
+          return {
+            ...l,
+            guideStrokes: [...(l.guideStrokes || []), newStroke]
+          };
+        }
+        return l;
+      });
+
+      newKeyframes = keyframes.map(kf => {
+        let newLayerStates = [...kf.layerStates];
         const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
         if (existingLayerStateIndex >= 0) {
           newLayerStates[existingLayerStateIndex] = {
             ...newLayerStates[existingLayerStateIndex],
-            strokes: [newStroke]
+            strokes: [...newLayerStates[existingLayerStateIndex].strokes, newStroke]
           };
         } else {
           newLayerStates.push({
@@ -1569,14 +1665,34 @@ export const useStore = create<StoreState>((set, get) => ({
             strokes: [newStroke]
           });
         }
-
         return { ...kf, layerStates: newLayerStates };
-      }
-      return kf;
-    });
+      });
+    } else {
+      newKeyframes = keyframes.map(kf => {
+        if (kf.id === targetKeyframeId) {
+          let newLayerStates = [...kf.layerStates].filter(ls => !ls.layerId.includes('-sym-'));
+
+          const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+          if (existingLayerStateIndex >= 0) {
+            newLayerStates[existingLayerStateIndex] = {
+              ...newLayerStates[existingLayerStateIndex],
+              strokes: [newStroke]
+            };
+          } else {
+            newLayerStates.push({
+              layerId: selectedLayerId,
+              strokes: [newStroke]
+            });
+          }
+
+          return { ...kf, layerStates: newLayerStates };
+        }
+        return kf;
+      });
+    }
 
     return { 
-      project: { ...state.project, keyframes: newKeyframes, layers: updatedLayers },
+      project: { ...state.project, keyframes: newKeyframes, layers: finalLayers },
       // AUTO-SELECT THE NEWLY CREATED STROKE to enable "Direct Select" workflow
       ui: { ...state.ui, selectedKeyframeId: targetKeyframeId, selectedStrokeId: newStroke.id },
       history: { past, future: [] }
@@ -1653,7 +1769,21 @@ export const useStore = create<StoreState>((set, get) => ({
       return kf;
     });
 
-    return { project: { ...state.project, keyframes }};
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    let updatedLayers = state.project.layers;
+    if (targetLayer?.isGuide) {
+      updatedLayers = state.project.layers.map(l => {
+        if (l.id === layerId && l.guideStrokes) {
+          return {
+            ...l,
+            guideStrokes: l.guideStrokes.map(s => s.id === strokeId ? { ...s, points: newPoints, shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig } : s)
+          };
+        }
+        return l;
+      });
+    }
+
+    return { project: { ...state.project, layers: updatedLayers, keyframes }};
   }),
   
   deleteStroke: (strokeId) => set((state) => {
@@ -1662,6 +1792,20 @@ export const useStore = create<StoreState>((set, get) => ({
      if (!kfId || !layerId) return state;
 
      const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+
+     const targetLayer = state.project.layers.find(l => l.id === layerId);
+     let updatedLayers = state.project.layers;
+     if (targetLayer?.isGuide) {
+       updatedLayers = state.project.layers.map(l => {
+         if (l.id === layerId) {
+           return {
+             ...l,
+             guideStrokes: (l.guideStrokes || []).filter(s => s.id !== strokeId)
+           };
+         }
+         return l;
+       });
+     }
 
      // 1. Remove the stroke from the keyframe's layerState
      let newKeyframes = state.project.keyframes.map(kf => {
@@ -1708,7 +1852,7 @@ export const useStore = create<StoreState>((set, get) => ({
      }
 
      return {
-         project: { ...state.project, keyframes: newKeyframes, axes: newAxes },
+         project: { ...state.project, layers: updatedLayers, keyframes: newKeyframes, axes: newAxes },
          ui: { ...state.ui, selectedKeyframeId: newSelectedId, selectedStrokeId: null },
          history: { past, future: [] }
      };
