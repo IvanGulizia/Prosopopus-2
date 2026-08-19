@@ -1,212 +1,35 @@
 /**
- * Prosopopus v2 - Autonomous Player
- * Lightweight rendering engine for Prosopopus vector interpolation projects.
+ * Prosopopus v2 - Autonomous Standalone Player
+ * Full-fidelity reproduction of the Play mode rendering and physics engine.
  */
 
-import { Project, Point, Stroke, Layer, Keyframe, InterpolationStrategy, StyleProps, InterpolationMode } from '../types';
+import {
+  Project,
+  Point,
+  Stroke,
+  Layer,
+  Keyframe,
+  StyleProps,
+  CornerRadii
+} from '../types';
 
-// --- CORE MATH UTILS (Inlined for autonomy) ---
+import {
+  calculateInterpolationWeights,
+  interpolateStrokePoints,
+  drawRoundedRectangle,
+  drawCornerRoundedPath,
+  drawCatmullRomSpline,
+  getSymmetricPoints
+} from '../utils/math';
 
-const distance = (p1: Point, p2: Point): number => Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-const lerp = (start: number, end: number, t: number): number => start * (1 - t) + end * t;
-
-const parseColor = (color: string): { r: number, g: number, b: number, a: number } => {
-  if (!color || color === 'none') return { r: 0, g: 0, b: 0, a: 1 };
-  if (color.startsWith('#')) {
-    let hex = color.slice(1);
-    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
-    const bigint = parseInt(hex, 16);
-    return { r: (bigint >> 16) & 255, g: (bigint >> 8) & 255, b: bigint & 255, a: 1 };
-  }
-  if (color.startsWith('rgb')) {
-    const match = color.match(/(\d+(\.\d+)?)/g);
-    if (match) {
-      return {
-        r: parseFloat(match[0]),
-        g: parseFloat(match[1]),
-        b: parseFloat(match[2]),
-        a: match[3] ? parseFloat(match[3]) : 1
-      };
-    }
-  }
-  return { r: 0, g: 0, b: 0, a: 1 };
-};
-
-const mixColors = (colors: { color: string | 'none', weight: number }[]): string => {
-  let rSum = 0, gSum = 0, bSum = 0, aSum = 0;
-  let hasColor = false;
-  let totalAlphaWeight = 0;
-
-  for (const c of colors) {
-    const rgba = parseColor(c.color);
-    const alpha = c.color === 'none' ? 0 : rgba.a;
-    if (alpha > 0) {
-      hasColor = true;
-      rSum += rgba.r * c.weight * alpha;
-      gSum += rgba.g * c.weight * alpha;
-      bSum += rgba.b * c.weight * alpha;
-    }
-    aSum += alpha * c.weight;
-    totalAlphaWeight += c.weight * alpha;
-  }
-
-  if (!hasColor || aSum <= 0.001 || totalAlphaWeight <= 0.0001) return 'none';
-  return `rgba(${Math.round(rSum / totalAlphaWeight)}, ${Math.round(gSum / totalAlphaWeight)}, ${Math.round(bSum / totalAlphaWeight)}, ${aSum.toFixed(3)})`;
-};
-
-const resamplePoints = (points: Point[], targetCount: number): Point[] => {
-  if (points.length < 2 || targetCount < 2) return points;
-  let totalLength = 0;
-  for (let i = 1; i < points.length; i++) totalLength += distance(points[i - 1], points[i]);
-  if (totalLength === 0) return Array(targetCount).fill(points[0]);
-
-  const step = totalLength / (targetCount - 1);
-  const newPoints: Point[] = [points[0]];
-  let currentDist = 0;
-  let nextPointIndex = 1;
-
-  for (let i = 1; i < targetCount; i++) {
-    const targetDist = i * step;
-    let distSoFar = currentDist;
-    let p1 = points[nextPointIndex - 1];
-    let p2 = points[nextPointIndex];
-    let segmentDist = distance(p1, p2);
-
-    while (distSoFar + segmentDist < targetDist && nextPointIndex < points.length - 1) {
-      distSoFar += segmentDist;
-      currentDist = distSoFar;
-      nextPointIndex++;
-      p1 = points[nextPointIndex - 1];
-      p2 = points[nextPointIndex];
-      segmentDist = distance(p1, p2);
-    }
-
-    const t = segmentDist === 0 ? 0 : (targetDist - distSoFar) / segmentDist;
-    newPoints.push({ x: lerp(p1.x, p2.x, t), y: lerp(p1.y, p2.y, t), pressure: lerp(p1.pressure || 0.5, p2.pressure || 0.5, t) });
-  }
-  newPoints[targetCount - 1] = points[points.length - 1];
-  return newPoints;
-};
-
-const upsamplePreservingCorners = (points: Point[], targetCount: number): Point[] => {
-  if (points.length === 0) return [];
-  if (points.length >= targetCount) return points;
-  const pointsToAdd = targetCount - points.length;
-  const segments = points.length - 1;
-  if (segments < 1) return Array(targetCount).fill(points[0]);
-  const baseAdd = Math.floor(pointsToAdd / segments);
-  const remainder = pointsToAdd % segments;
-  const newPoints: Point[] = [];
-  for (let i = 0; i < segments; i++) {
-    newPoints.push(points[i]);
-    const count = baseAdd + (i < remainder ? 1 : 0);
-    for (let k = 1; k <= count; k++) {
-      const t = k / (count + 1);
-      newPoints.push({ x: lerp(points[i].x, points[i + 1].x, t), y: lerp(points[i].y, points[i + 1].y, t), pressure: lerp(points[i].pressure || 0.5, points[i + 1].pressure || 0.5, t) });
-    }
-  }
-  newPoints.push(points[points.length - 1]);
-  return newPoints;
-};
-
-const calculateBilinearGridWeights = (currentAxes: Record<string, number>, keyframes: Keyframe[]) => {
-  const weights: Record<string, number> = {};
-  const curX = currentAxes['axis-x'] || 0;
-  const curY = currentAxes['axis-y'] || 0;
-  const EPSILON = 0.005;
-
-  const distinctCoords = (arr: number[]) => {
-    const sorted = [...arr].sort((a, b) => a - b);
-    const result = [];
-    if (sorted.length > 0) result.push(sorted[0]);
-    for (let i = 1; i < sorted.length; i++) if (sorted[i] > sorted[i - 1] + EPSILON) result.push(sorted[i]);
-    return result;
+export const resolveStrokeStyle = (stroke: Stroke | undefined, layer: Layer | undefined): StyleProps => {
+  const defaultStyle: StyleProps = {
+    strokeColor: '#000000',
+    strokeWidth: 4,
+    fillColor: 'none',
+    lineStyle: 'solid',
+    cornerRoundness: 0
   };
-
-  const xCoords = distinctCoords(keyframes.map(k => k.axisValues['axis-x'] || 0));
-  const yCoords = distinctCoords(keyframes.map(k => k.axisValues['axis-y'] || 0));
-
-  if (xCoords.length === 0 || yCoords.length === 0) {
-    if (keyframes.length > 0) weights[keyframes[0].id] = 1;
-    return weights;
-  }
-
-  const findInterval = (val: number, grid: number[]) => {
-    if (val <= grid[0]) return { lower: grid[0], upper: grid[0], t: 0 };
-    if (val >= grid[grid.length - 1]) return { lower: grid[grid.length - 1], upper: grid[grid.length - 1], t: 0 };
-    for (let i = 0; i < grid.length - 1; i++) {
-      if (val >= grid[i] && val <= grid[i + 1]) {
-        const span = grid[i + 1] - grid[i];
-        return { lower: grid[i], upper: grid[i + 1], t: span === 0 ? 0 : (val - grid[i]) / span };
-      }
-    }
-    return { lower: grid[0], upper: grid[0], t: 0 };
-  };
-
-  const xInfo = findInterval(curX, xCoords);
-  const yInfo = findInterval(curY, yCoords);
-
-  const resolveCornerWeights = (targetX: number, targetY: number) => {
-    const exact = keyframes.find(k => Math.abs((k.axisValues['axis-x'] || 0) - targetX) < EPSILON && Math.abs((k.axisValues['axis-y'] || 0) - targetY) < EPSILON);
-    if (exact) return { [exact.id]: 1.0 };
-    let totalW = 0;
-    const cornerWeights: Record<string, number> = {};
-    keyframes.forEach(k => {
-      const dx = (k.axisValues['axis-x'] || 0) - targetX;
-      const dy = (k.axisValues['axis-y'] || 0) - targetY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const w = dist < 0.001 ? 1000 : 1 / Math.pow(dist, 2);
-      cornerWeights[k.id] = w;
-      totalW += w;
-    });
-    for (const id in cornerWeights) cornerWeights[id] /= totalW;
-    return cornerWeights;
-  };
-
-  const corners = [
-    { x: xInfo.lower, y: yInfo.lower, wBase: (1 - xInfo.t) * (1 - yInfo.t) },
-    { x: xInfo.upper, y: yInfo.lower, wBase: xInfo.t * (1 - yInfo.t) },
-    { x: xInfo.lower, y: yInfo.upper, wBase: (1 - xInfo.t) * yInfo.t },
-    { x: xInfo.upper, y: yInfo.upper, wBase: xInfo.t * yInfo.t }
-  ];
-
-  corners.forEach(c => {
-    if (c.wBase <= 0.0001) return;
-    const cornerComposition = resolveCornerWeights(c.x, c.y);
-    for (const kfId in cornerComposition) weights[kfId] = (weights[kfId] || 0) + (cornerComposition[kfId] * c.wBase);
-  });
-
-  return weights;
-};
-
-const calculateIDWWeights = (currentAxes: Record<string, number>, keyframes: Keyframe[], exponent: number) => {
-  const weights: Record<string, number> = {};
-  let totalWeight = 0;
-  for (const kf of keyframes) {
-    let dist = 0;
-    for (const axisId in currentAxes) dist += Math.pow((currentAxes[axisId] || 0) - (kf.axisValues[axisId] || 0), 2);
-    dist = Math.sqrt(dist);
-    if (dist < 0.001) {
-      keyframes.forEach(k => weights[k.id] = 0);
-      weights[kf.id] = 1;
-      return weights;
-    }
-    const w = 1 / Math.pow(dist, exponent);
-    weights[kf.id] = w;
-    totalWeight += w;
-  }
-  for (const id in weights) weights[id] /= totalWeight;
-  return weights;
-};
-
-const calculateInterpolationWeights = (currentAxes: Record<string, number>, keyframes: Keyframe[], exponent: number = 2, strategy: InterpolationStrategy = 'bilinear-grid'): Record<string, number> => {
-  if (keyframes.length === 0) return {};
-  if (keyframes.length === 1) return { [keyframes[0].id]: 1.0 };
-  return strategy === 'bilinear-grid' ? calculateBilinearGridWeights(currentAxes, keyframes) : calculateIDWWeights(currentAxes, keyframes, exponent);
-};
-
-const resolveStrokeStyle = (stroke: Stroke | undefined, layer: Layer | undefined): StyleProps => {
-  const defaultStyle: StyleProps = { strokeColor: '#000000', strokeWidth: 4, fillColor: 'none', lineStyle: 'solid', cornerRoundness: 0 };
   const baseStyle = layer?.baseStyle || defaultStyle;
   if (!stroke || !stroke.style) return { ...baseStyle, cornerRoundness: baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness };
   return {
@@ -214,115 +37,191 @@ const resolveStrokeStyle = (stroke: Stroke | undefined, layer: Layer | undefined
     strokeWidth: stroke.style.strokeWidth ?? baseStyle.strokeWidth,
     fillColor: stroke.style.fillColor ?? baseStyle.fillColor,
     lineStyle: stroke.style.lineStyle ?? baseStyle.lineStyle,
-    cornerRoundness: stroke.style.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness
+    cornerRoundness: stroke.style.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness,
+    cornerRadii: stroke.style.cornerRadii ?? baseStyle.cornerRadii,
+    strokeCap: stroke.style.strokeCap ?? baseStyle.strokeCap,
+    strokeResolution: stroke.style.strokeResolution ?? baseStyle.strokeResolution
   };
 };
-
-const interpolateStrokePoints = (
-  activeKeyframes: { weight: number; points: Point[] | undefined, style: Stroke | undefined, color: string, fillColor: string, width: number, cornerRoundness: number }[],
-  mode: InterpolationMode = 'resample',
-  targetCount: number = 200
-): { points: Point[], color: string, fillColor: string, width: number, cornerRoundness: number } => {
-  if (activeKeyframes.length === 0) return { points: [], color: 'rgba(0,0,0,0)', fillColor: 'none', width: 1, cornerRoundness: 0 };
-
-  const color = mixColors(activeKeyframes.map(k => ({ color: k.color, weight: k.weight })));
-  const fillColor = mixColors(activeKeyframes.map(k => ({ color: k.fillColor, weight: k.weight })));
-  let totalWidth = 0, totalCornerRoundness = 0, weightDiv = 0;
-  activeKeyframes.forEach(k => { totalWidth += k.width * k.weight; totalCornerRoundness += k.cornerRoundness * k.weight; weightDiv += k.weight; });
-  const width = weightDiv > 0 ? totalWidth / weightDiv : 1;
-  const cornerRoundness = weightDiv > 0 ? totalCornerRoundness / weightDiv : 0;
-
-  let ACTUAL_TARGET_COUNT = targetCount;
-  const maxPts = Math.max(...activeKeyframes.map(k => k.points!.length));
-  if (mode === 'points' || mode === 'spline') ACTUAL_TARGET_COUNT = maxPts;
-
-  const referenceKeyframe = activeKeyframes.reduce((prev, curr) => (prev.weight >= curr.weight) ? prev : curr);
-  const referenceStroke = referenceKeyframe.points!;
-  const referenceResampled = (mode === 'points' || mode === 'spline') ? upsamplePreservingCorners(referenceStroke, ACTUAL_TARGET_COUNT) : resamplePoints(referenceStroke, ACTUAL_TARGET_COUNT);
-
-  const resultPoints: Point[] = [];
-  for (let i = 0; i < ACTUAL_TARGET_COUNT; i++) {
-    let x = 0, y = 0, pressure = 0, totalW = 0;
-    for (const kf of activeKeyframes) {
-      const rawPoints = kf.points!;
-      const processed = (mode === 'points' || mode === 'spline') ? (rawPoints.length === ACTUAL_TARGET_COUNT ? rawPoints : upsamplePreservingCorners(rawPoints, ACTUAL_TARGET_COUNT)) : resamplePoints(rawPoints, ACTUAL_TARGET_COUNT);
-      const pt = processed[i];
-      x += pt.x * kf.weight; y += pt.y * kf.weight; pressure += (pt.pressure || 0.5) * kf.weight; totalW += kf.weight;
-    }
-    if (totalW > 0) resultPoints.push({ x: x / totalW, y: y / totalW, pressure: pressure / totalW });
-  }
-  return { points: resultPoints, color, fillColor, width, cornerRoundness };
-};
-
-const drawCornerRoundedPath = (ctx: CanvasRenderingContext2D, points: Point[], roundness: number) => {
-  if (points.length < 2) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length - 1; i++) {
-    const curr = points[i], prev = points[i - 1], next = points[i + 1];
-    const len1 = distance(prev, curr), len2 = distance(curr, next);
-    if (len1 < 0.1 || len2 < 0.1) { ctx.lineTo(curr.x, curr.y); continue; }
-    const dot = ((curr.x - prev.x) / len1) * ((next.x - curr.x) / len2) + ((curr.y - prev.y) / len1) * ((next.y - curr.y) / len2);
-    if (dot > 0.99) { ctx.lineTo(curr.x, curr.y); continue; }
-    const radius = Math.min(len1, len2) * 0.5 * (roundness / 100) * Math.tan((Math.PI - Math.acos(Math.max(-1, Math.min(1, dot)))) / 2);
-    if (radius < 0.05 || isNaN(radius)) { ctx.lineTo(curr.x, curr.y); continue; }
-    ctx.arcTo(curr.x, curr.y, next.x, next.y, radius);
-  }
-  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-};
-
-const drawCatmullRomSpline = (ctx: CanvasRenderingContext2D, points: Point[], tension: number = 0.5) => {
-  if (points.length < 2) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = i > 0 ? points[i - 1] : points[0], p1 = points[i], p2 = points[i + 1], p3 = i < points.length - 2 ? points[i + 2] : points[points.length - 1];
-    ctx.bezierCurveTo(p1.x + (p2.x - p0.x) / 6 * tension, p1.y + (p2.y - p0.y) / 6 * tension, p2.x - (p3.x - p1.x) / 6 * tension, p2.y - (p3.y - p1.y) / 6 * tension, p2.x, p2.y);
-  }
-};
-
-// --- PLAYER CLASS ---
 
 export class ProsopopusPlayer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private project: Project;
+  
   private currentAxes: Record<string, number> = { 'axis-x': 0.5, 'axis-y': 0.5 };
   private targetAxes: Record<string, number> = { 'axis-x': 0.5, 'axis-y': 0.5 };
-  private velocity: { x: number, y: number } = { x: 0, y: 0 };
+  private velocity: { x: number; y: number } = { x: 0, y: 0 };
+  
+  // Pointer dynamics for kinetic momentum impulse
+  private pointerVelocity: { x: number; y: number } = { x: 0, y: 0 };
+  private lastPointerPos: { x: number; y: number } = { x: 0.5, y: 0.5 };
+  private lastPointerTime: number = 0;
+  
+  // Vertex inertia map for Disney follow-through spring dynamics per layer
+  private vertexInertiaMap: Map<string, { current: Point[]; velocity: { x: number; y: number }[] }> = new Map();
+  
   private lastTime: number = 0;
+  private animationFrameId: number = 0;
   private isRunning: boolean = false;
+  
+  // Event listener cleanup
+  private cleanupListeners: (() => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement, project: Project) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Could not get canvas context');
+    if (!ctx) throw new Error('Could not get 2D rendering context for canvas');
     this.ctx = ctx;
     this.project = project;
+
+    const axisX = project.axes?.find(a => a.id === 'axis-x');
+    const axisY = project.axes?.find(a => a.id === 'axis-y');
+    const initX = axisX ? axisX.currentValue : 0.5;
+    const initY = axisY ? axisY.currentValue : 0.5;
+    this.currentAxes = { 'axis-x': initX, 'axis-y': initY };
+    this.targetAxes = { 'axis-x': initX, 'axis-y': initY };
+    this.lastPointerPos = { x: initX, y: initY };
+
     this.setupInteraction();
   }
 
+  public setProject(project: Project) {
+    this.project = project;
+    this.vertexInertiaMap.clear();
+  }
+
   private setupInteraction() {
-    const handleMove = (e: MouseEvent | TouchEvent) => {
+    const handleMove = (clientX: number, clientY: number) => {
       const rect = this.canvas.getBoundingClientRect();
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-      let x = (clientX - rect.left) / rect.width;
-      let y = (clientY - rect.top) / rect.height;
-      this.targetAxes['axis-x'] = Math.max(0, Math.min(1, x));
-      this.targetAxes['axis-y'] = Math.max(0, Math.min(1, y));
+      if (rect.width === 0 || rect.height === 0) return;
+
+      const rawNormX = (clientX - rect.left) / rect.width;
+      const rawNormY = (clientY - rect.top) / rect.height;
+
+      // Track pointer velocity for momentum extrapolation
+      const now = performance.now();
+      const dt = Math.max(0.005, (now - (this.lastPointerTime || now)) / 1000);
+      this.lastPointerTime = now;
+
+      const deltaX = rawNormX - this.lastPointerPos.x;
+      const deltaY = rawNormY - this.lastPointerPos.y;
+      this.lastPointerPos = { x: rawNormX, y: rawNormY };
+
+      // Exponential smoothing on pointer velocity
+      const instantVelX = deltaX / dt;
+      const instantVelY = deltaY / dt;
+      this.pointerVelocity.x = this.pointerVelocity.x * 0.4 + instantVelX * 0.6;
+      this.pointerVelocity.y = this.pointerVelocity.y * 0.4 + instantVelY * 0.6;
+
+      const settings = this.project.settings || {};
+      const padding = settings.axisMatrixPadding ?? 0;
+      const minX = Math.max(0, padding);
+      const maxX = Math.min(1, 1 - padding);
+      const minY = Math.max(0, padding);
+      const maxY = Math.min(1, 1 - padding);
+
+      let processedX = rawNormX;
+      let processedY = rawNormY;
+
+      // Rubberband Border Overshoot (Logarithmic resistance beyond active margin/padding)
+      if (settings.overshootRubberbandEnabled) {
+        const factor = settings.overshootRubberbandFactor ?? 0.35;
+        if (processedX < minX) {
+          const overflow = minX - processedX;
+          processedX = minX - (overflow * factor);
+        } else if (processedX > maxX) {
+          const overflow = processedX - maxX;
+          processedX = maxX + (overflow * factor);
+        }
+
+        if (processedY < minY) {
+          const overflow = minY - processedY;
+          processedY = minY - (overflow * factor);
+        } else if (processedY > maxY) {
+          const overflow = processedY - maxY;
+          processedY = maxY + (overflow * factor);
+        }
+
+        // Bound within container limits [0, 1]
+        processedX = Math.max(0, Math.min(1, processedX));
+        processedY = Math.max(0, Math.min(1, processedY));
+      } else {
+        processedX = Math.max(minX, Math.min(maxX, processedX));
+        processedY = Math.max(minY, Math.min(maxY, processedY));
+      }
+
+      // Snap Grid in Play Mode
+      if (settings.snapPlayMode) {
+        const effectiveSizeX = maxX - minX;
+        const effectiveSizeY = maxY - minY;
+        if (effectiveSizeX > 0 && effectiveSizeY > 0) {
+          const divisions = (settings.axisMatrixDivisions && settings.axisMatrixDivisions > 1)
+            ? settings.axisMatrixDivisions - 1
+            : 10;
+          const relX = (processedX - minX) / effectiveSizeX;
+          const relY = (processedY - minY) / effectiveSizeY;
+          const snappedRelX = Math.round(relX * divisions) / divisions;
+          const snappedRelY = Math.round(relY * divisions) / divisions;
+          processedX = minX + (snappedRelX * effectiveSizeX);
+          processedY = minY + (snappedRelY * effectiveSizeY);
+        }
+      }
+
+      // Momentum / Kinetic Impulse Boost
+      if (settings.overshootMomentumEnabled) {
+        const momentumMult = (settings.overshootMomentumFactor ?? 0.4) * 0.15;
+        processedX += this.pointerVelocity.x * momentumMult;
+        processedY += this.pointerVelocity.y * momentumMult;
+        processedX = Math.max(0, Math.min(1, processedX));
+        processedY = Math.max(0, Math.min(1, processedY));
+      }
+
+      this.targetAxes['axis-x'] = processedX;
+      this.targetAxes['axis-y'] = processedY;
     };
-    this.canvas.addEventListener('mousemove', handleMove);
-    this.canvas.addEventListener('touchmove', handleMove);
+
+    const onPointerMove = (e: PointerEvent) => handleMove(e.clientX, e.clientY);
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches && e.touches.length > 0) {
+        handleMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    };
+    const onMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
+
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+
+    this.cleanupListeners = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('mousemove', onMouseMove);
+    };
   }
 
   public start() {
+    if (this.isRunning) return;
     this.isRunning = true;
-    requestAnimationFrame(this.loop.bind(this));
+    this.lastTime = performance.now();
+    this.animationFrameId = requestAnimationFrame(this.loop.bind(this));
   }
 
   public stop() {
     this.isRunning = false;
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = 0;
+    }
+  }
+
+  public destroy() {
+    this.stop();
+    if (this.cleanupListeners) {
+      this.cleanupListeners();
+      this.cleanupListeners = null;
+    }
+    this.vertexInertiaMap.clear();
   }
 
   private loop(time: number) {
@@ -332,37 +231,72 @@ export class ProsopopusPlayer {
     this.lastTime = time;
 
     this.updatePhysics(dt);
-    this.render();
-    requestAnimationFrame(this.loop.bind(this));
+    this.render(dt);
+
+    this.animationFrameId = requestAnimationFrame(this.loop.bind(this));
   }
 
   private updatePhysics(dt: number) {
     const settings = this.project.settings || {};
+    const targetX = this.targetAxes['axis-x'] ?? 0.5;
+    const targetY = this.targetAxes['axis-y'] ?? 0.5;
+
     if (settings.playModePhysics) {
       const stiffness = settings.springStiffness || 120;
-      const damping = settings.springDamping || 20;
-      const fx = (this.targetAxes['axis-x'] - this.currentAxes['axis-x']) * stiffness - this.velocity.x * damping;
-      const fy = (this.targetAxes['axis-y'] - this.currentAxes['axis-y']) * stiffness - this.velocity.y * damping;
-      this.velocity.x += fx * dt;
-      this.velocity.y += fy * dt;
+      let damping = settings.springDamping || 20;
+
+      // Option A: Bounciness / Harmonic Spring Overshoot (Underdamped factor)
+      if (settings.overshootBouncinessEnabled) {
+        const bounciness = settings.overshootBounciness ?? 0.5;
+        const criticalDamping = 2 * Math.sqrt(stiffness);
+        const minDamping = criticalDamping * 0.15;
+        const maxDamping = criticalDamping * 1.2;
+        const targetUnderdamping = maxDamping - bounciness * (maxDamping - minDamping);
+        damping = Math.min(damping, targetUnderdamping);
+      }
+
+      const forceX = (targetX - this.currentAxes['axis-x']) * stiffness - this.velocity.x * damping;
+      const forceY = (targetY - this.currentAxes['axis-y']) * stiffness - this.velocity.y * damping;
+
+      this.velocity.x += forceX * dt;
+      this.velocity.y += forceY * dt;
+
       this.currentAxes['axis-x'] += this.velocity.x * dt;
       this.currentAxes['axis-y'] += this.velocity.y * dt;
+
+      if (Math.abs(this.velocity.x) < 0.0001 && Math.abs(targetX - this.currentAxes['axis-x']) < 0.0001) {
+        this.currentAxes['axis-x'] = targetX;
+        this.velocity.x = 0;
+      }
+      if (Math.abs(this.velocity.y) < 0.0001 && Math.abs(targetY - this.currentAxes['axis-y']) < 0.0001) {
+        this.currentAxes['axis-y'] = targetY;
+        this.velocity.y = 0;
+      }
     } else {
-      this.currentAxes['axis-x'] = this.targetAxes['axis-x'];
-      this.currentAxes['axis-y'] = this.targetAxes['axis-y'];
+      this.currentAxes['axis-x'] = targetX;
+      this.currentAxes['axis-y'] = targetY;
+      this.velocity = { x: 0, y: 0 };
     }
+
     this.currentAxes['axis-x'] = Math.max(0, Math.min(1, this.currentAxes['axis-x']));
     this.currentAxes['axis-y'] = Math.max(0, Math.min(1, this.currentAxes['axis-y']));
   }
 
-  private render() {
+  private render(dt: number) {
     const { canvas, ctx, project, currentAxes } = this;
     const settings = project.settings || {};
-    const dpr = window.devicePixelRatio || 1;
-    const w = project.canvasSize.width, h = project.canvasSize.height;
+    const dpr = settings.resolutionScale || window.devicePixelRatio || 1;
+    const w = project.canvasSize?.width || 800;
+    const h = project.canvasSize?.height || 800;
+
+    const baseResolution = settings.strokeResolution || 400;
+    const interpolationTargetCount = settings.performanceMode
+      ? Math.max(40, Math.min(120, Math.round(baseResolution * 0.35)))
+      : baseResolution;
 
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr; canvas.height = h * dpr;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
       ctx.scale(dpr, dpr);
     }
 
@@ -370,50 +304,183 @@ export class ProsopopusPlayer {
     ctx.fillStyle = settings.theme?.canvasBg || '#ffffff';
     ctx.fillRect(0, 0, w, h);
 
+    const allowExtrapolation = settings.overshootExtrapolationEnabled ?? true;
+    const extrapolationFactor = settings.overshootExtrapolationFactor ?? 0.2;
+
     project.layers.forEach(layer => {
       if (!layer.visible) return;
-      const relevantKfs = project.keyframes.filter(kf => (kf.layerStates.find(s => s.layerId === layer.id)?.strokes.length || 0) > 0);
-      if (relevantKfs.length === 0) return;
 
-      const weights = calculateInterpolationWeights(currentAxes, relevantKfs, settings.interpolationExponent, settings.interpolationStrategy);
-      const activeKfs = relevantKfs.map(k => ({ ...k, weight: weights[k.id] || 0 })).filter(k => k.weight > 0.0001);
-      const strokeData = activeKfs.map(kf => {
-        const s = kf.layerStates.find(ls => ls.layerId === layer.id)?.strokes[0];
-        const style = resolveStrokeStyle(s, layer);
-        return { weight: kf.weight, points: s?.points, style: s, color: style.strokeColor, fillColor: style.fillColor, width: style.strokeWidth, cornerRoundness: style.cornerRoundness ?? 0 };
+      const layerRelevantKeyframes = project.keyframes.filter(kf => {
+        const ls = kf.layerStates.find(s => s.layerId === layer.id);
+        return ls && ls.strokes.length > 0;
       });
 
-      const primary = strokeData.sort((a, b) => b.weight - a.weight).find(sd => sd.style)?.style;
-      if (!primary) return;
+      if (layerRelevantKeyframes.length === 0) return;
 
-      const { points, color, fillColor, width, cornerRoundness } = interpolateStrokePoints(
+      const weights = calculateInterpolationWeights(
+        currentAxes,
+        layerRelevantKeyframes,
+        settings.interpolationExponent,
+        settings.interpolationStrategy,
+        allowExtrapolation,
+        extrapolationFactor
+      );
+
+      const activeKeyframes = layerRelevantKeyframes
+        .map(k => ({ ...k, weight: weights[k.id] || 0 }))
+        .filter(k => Math.abs(k.weight) > 0.0001);
+
+      const strokeId = `stroke-${layer.id}-unique`;
+
+      const strokeData = activeKeyframes.map(kf => {
+        const state = kf.layerStates.find(ls => ls.layerId === layer.id);
+        const s = state?.strokes[0];
+        const resolvedStyle = resolveStrokeStyle(s, layer);
+        return {
+          weight: kf.weight,
+          points: s?.points,
+          style: s,
+          color: resolvedStyle.strokeColor,
+          fillColor: resolvedStyle.fillColor,
+          width: resolvedStyle.strokeWidth,
+          cornerRoundness: resolvedStyle.cornerRoundness ?? 0,
+          cornerRadii: resolvedStyle.cornerRadii
+        };
+      });
+
+      const sortedByWeight = [...strokeData].sort((a, b) => b.weight - a.weight);
+      const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
+      if (!primaryStroke) return;
+
+      let {
+        points: interpolatedPoints,
+        color: interpolatedColor,
+        fillColor: interpolatedFill,
+        width: interpolatedWidth,
+        cornerRoundness: interpolatedCornerRoundness,
+        cornerRadii: interpolatedCornerRadii
+      } = interpolateStrokePoints(
+        strokeId,
+        primaryStroke.points,
         strokeData,
         layer.interpolationMode,
-        settings.performanceMode ? 80 : 200
+        interpolationTargetCount,
+        {
+          exaggerationEnabled: settings.overshootExaggerationEnabled,
+          exaggerationFactor: settings.overshootExaggerationFactor ?? 1.25
+        }
       );
-      if (points.length > 0) {
-        if (layer.interpolationMode === 'spline') drawCatmullRomSpline(ctx, points, 0.5);
-        else if (cornerRoundness > 0) drawCornerRoundedPath(ctx, points, cornerRoundness);
-        else {
-          ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-        }
-        ctx.globalAlpha = layer.opacity;
-        ctx.lineCap = settings.strokeCap || 'round';
-        ctx.lineJoin = 'round';
 
-        switch(layer.blendMode) {
-          case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
-          case 'screen': ctx.globalCompositeOperation = 'screen'; break;
-          case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
-          case 'difference': ctx.globalCompositeOperation = 'difference'; break;
-          case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
-          default: ctx.globalCompositeOperation = 'source-over';
+      // Approach B: Dynamic Vertex Inertial Velocity / Jiggle (Disney Follow-Through)
+      if (settings.overshootVertexInertiaEnabled && interpolatedPoints.length > 0) {
+        const stiffness = (settings.overshootVertexInertiaFactor ?? 0.6) * 120.0;
+        const damping = (settings.overshootVertexDamping ?? 0.75) * 35.0;
+        const mass = Math.max(0.1, settings.overshootVertexMass ?? 1.0);
+        const inertiaKey = `layer-${layer.id}`;
+        let stored = this.vertexInertiaMap.get(inertiaKey);
+
+        if (!stored || stored.current.length !== interpolatedPoints.length) {
+          stored = {
+            current: interpolatedPoints.map(p => ({ ...p })),
+            velocity: interpolatedPoints.map(() => ({ x: 0, y: 0 }))
+          };
+          this.vertexInertiaMap.set(inertiaKey, stored);
+        } else {
+          const subSteps = 2;
+          const subDt = Math.min(dt, 0.05) / subSteps;
+
+          for (let step = 0; step < subSteps; step++) {
+            for (let i = 0; i < interpolatedPoints.length; i++) {
+              const targetPt = interpolatedPoints[i];
+              const curPt = stored.current[i];
+              const vel = stored.velocity[i];
+
+              // Spring-Damper-Mass Force: F = k*(target - cur) - c*vel
+              const springF_x = (targetPt.x - curPt.x) * stiffness - vel.x * damping;
+              const springF_y = (targetPt.y - curPt.y) * stiffness - vel.y * damping;
+
+              vel.x += (springF_x / mass) * subDt;
+              vel.y += (springF_y / mass) * subDt;
+
+              curPt.x += vel.x * subDt;
+              curPt.y += vel.y * subDt;
+              curPt.pressure = targetPt.pressure;
+            }
+          }
+          interpolatedPoints = stored.current.map(p => ({ ...p }));
+        }
+      }
+
+      if (interpolatedPoints.length > 0) {
+        const layerSym = layer.symmetry?.enabled
+          ? layer.symmetry
+          : (settings.symmetryEnabled && settings.symmetryTarget !== 'merge')
+          ? {
+              enabled: true,
+              type: settings.symmetryType || 'vertical',
+              axisX: settings.symmetryAxisX ?? (w / 2),
+              axisY: settings.symmetryAxisY ?? (h / 2),
+              radialCount: settings.symmetryRadialCount || 4
+            }
+          : null;
+
+        const allInterpolatedPaths = [interpolatedPoints];
+        if (layerSym && layerSym.enabled) {
+          const ax = layerSym.axisX ?? (w / 2);
+          const ay = layerSym.axisY ?? (h / 2);
+          const symVariants = getSymmetricPoints(
+            interpolatedPoints,
+            layerSym.type,
+            ax,
+            ay,
+            layerSym.radialCount || 4
+          );
+          allInterpolatedPaths.push(...symVariants);
         }
 
-        if (fillColor !== 'none') { ctx.fillStyle = fillColor; ctx.fill(); }
-        if (color !== 'none') { ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke(); }
-        
+        allInterpolatedPaths.forEach(pathPts => {
+          if (pathPts.length === 0) return;
+
+          const isRectangleShape = primaryStroke?.shapeConfig?.type === 'rectangle';
+
+          if (layer.interpolationMode === 'spline') {
+            drawCatmullRomSpline(ctx, pathPts, 0.5);
+          } else if (isRectangleShape && (interpolatedCornerRadii || interpolatedCornerRoundness > 0)) {
+            drawRoundedRectangle(ctx, pathPts, interpolatedCornerRadii, interpolatedCornerRoundness);
+          } else {
+            ctx.beginPath();
+            if (interpolatedCornerRoundness > 0) {
+              drawCornerRoundedPath(ctx, pathPts, interpolatedCornerRoundness);
+            } else {
+              ctx.moveTo(pathPts[0].x, pathPts[0].y);
+              for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
+            }
+          }
+
+          ctx.globalAlpha = layer.opacity;
+          switch (layer.blendMode) {
+            case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+            case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+            case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+            case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+            case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+            default: ctx.globalCompositeOperation = 'source-over';
+          }
+
+          if (interpolatedFill && interpolatedFill !== 'none') {
+            ctx.fillStyle = interpolatedFill;
+            ctx.fill();
+          }
+          if (interpolatedColor && interpolatedColor !== 'none') {
+            ctx.lineCap = settings.strokeCap || 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = interpolatedColor;
+            ctx.lineWidth = interpolatedWidth;
+            ctx.stroke();
+          }
+        });
+
+        ctx.globalAlpha = 1.0;
         ctx.globalCompositeOperation = 'source-over';
       }
     });
