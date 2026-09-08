@@ -1,7 +1,7 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig } from '../types';
-import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME } from '../constants';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig, AnimationTimeline, TimelineKeyframeMarker, EasingType, LoopMode, LayerInteraction, InteractionTrigger, InteractionAction, LayerDriverMode, LayerTimelineTrack, LayerTimelineKeyframe, InteractionCollider } from '../types';
+import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME, DEFAULT_ANIMATION } from '../constants';
 import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour, generateShapePoints } from '../utils/math';
 
 interface StoreState {
@@ -20,6 +20,45 @@ interface StoreState {
   undo: () => void;
   redo: () => void;
   
+  // Mode Expert & Timeline Actions
+  toggleExpertMode: () => void;
+  setExpertMode: (enabled: boolean) => void;
+  toggleTimelinePanel: () => void;
+  toggleInteractionsPanel: () => void;
+  setActiveAnimation: (id: string) => void;
+  addAnimation: (name?: string) => void;
+  deleteAnimation: (id: string) => void;
+  renameAnimation: (id: string, name: string) => void;
+  setAnimationDuration: (id: string, duration: number) => void;
+  setAnimationLoopMode: (id: string, loopMode: LoopMode) => void;
+  setTimelineCurrentTime: (time: number) => void;
+  setTimelinePlaying: (playing: boolean) => void;
+  addTimelineMarker: (animationId: string, time: number, keyframeId?: string, axisValues?: Record<string, number>, easing?: EasingType) => void;
+  updateTimelineMarker: (animationId: string, markerId: string, updates: Partial<TimelineKeyframeMarker>) => void;
+  deleteTimelineMarker: (animationId: string, markerId: string) => void;
+  setSelectedMarker: (markerId: string | null) => void;
+
+  // Layer Timeline Tracks (Multi-Layer Keyframing)
+  toggleAutoKeyframe: () => void;
+  setAutoKeyframe: (enabled: boolean) => void;
+  setLayerDriverMode: (layerId: string, mode: LayerDriverMode) => void;
+  addLayerTimelineKeyframe: (layerId: string, time?: number, easing?: EasingType) => void;
+  updateLayerTimelineKeyframe: (layerId: string, keyframeId: string, updates: Partial<LayerTimelineKeyframe>) => void;
+  moveLayerTimelineKeyframe: (layerId: string, keyframeId: string, newTime: number) => void;
+  updateLayerTimelineKeyframeEasing: (layerId: string, keyframeId: string, easing: EasingType) => void;
+  deleteLayerTimelineKeyframe: (layerId: string, keyframeId: string) => void;
+  duplicateLayerTimelineKeyframe: (layerId: string, keyframeId: string, newTime?: number) => void;
+  setSelectedLayerTrack: (layerId: string | null) => void;
+  setSelectedTimelineKeyframe: (layerId: string | null, keyframeId: string | null) => void;
+  captureCurrentPoseToTimelineKeyframe: (layerId: string, keyframeId: string) => void;
+
+  // State Machine & Interactive Actions (Figma-Style Triggers & Colliders)
+  addInteraction: (layerId: string, trigger: InteractionTrigger, action: InteractionAction, name?: string, collider?: InteractionCollider) => void;
+  updateInteraction: (id: string, updates: Partial<LayerInteraction>) => void;
+  deleteInteraction: (id: string) => void;
+  setInteractionCollider: (id: string, collider: InteractionCollider) => void;
+  setEditingColliderInteractionId: (interactionId: string | null) => void;
+
   // Project Actions
   resetProject: () => void;
   loadProject: (project: Project) => void;
@@ -156,21 +195,89 @@ interface StoreState {
 }
 
 import { resolveStrokeStyle } from '../utils/style';
+import { evaluateLayerTimelineStrokes } from '../utils/animation';
 
 const MAX_HISTORY = 50;
 
+// HELPER: Get current timeline strokes (interpolated if between keyframes, or matching keyframe)
+export const getTimelineStrokesForTime = (
+  track: LayerTimelineTrack | undefined,
+  targetTime: number,
+  layer: Layer | undefined,
+  anim: AnimationTimeline | undefined,
+  fallbackStrokes: Stroke[] = []
+): Stroke[] => {
+  if (!track || !track.keyframes || track.keyframes.length === 0) {
+    return JSON.parse(JSON.stringify(fallbackStrokes));
+  }
+  const matchKf = track.keyframes.find(k => Math.abs(k.time - targetTime) <= 0.03);
+  if (matchKf && matchKf.strokes && matchKf.strokes.length > 0) {
+    return JSON.parse(JSON.stringify(matchKf.strokes));
+  }
+  const evalStrokes = evaluateLayerTimelineStrokes(
+    track,
+    targetTime,
+    layer?.interpolationMode || 'resample',
+    200,
+    anim?.loopMode || 'loop',
+    anim?.duration || 2.0,
+    layer
+  );
+  if (evalStrokes && evalStrokes.length > 0) {
+    return JSON.parse(JSON.stringify(evalStrokes));
+  }
+  return JSON.parse(JSON.stringify(fallbackStrokes));
+};
+
 // HELPER: Extract UI properties (color, width) from the current selection context
-const getHydratedUIProps = (project: Project, layerId: string | null, kfId: string | null, strokeId: string | null): Partial<UIState> => {
-    if (!layerId || !kfId) return {};
+const getHydratedUIProps = (
+  project: Project,
+  layerId: string | null,
+  kfId: string | null,
+  strokeId: string | null,
+  timelineKfId?: string | null,
+  timelineTime?: number
+): Partial<UIState> => {
+    if (!layerId) return {};
 
     const layer = project.layers.find(l => l.id === layerId);
     if (!layer) return {};
 
-    const kf = project.keyframes.find(k => k.id === kfId);
-    if (!kf) return {};
+    let strokesToSearch: Stroke[] = [];
 
-    const layerState = kf.layerStates.find(ls => ls.layerId === layerId);
-    if (!layerState || layerState.strokes.length === 0) {
+    const animations = project.animations || [];
+    const activeAnim = animations[0];
+    const track = activeAnim?.tracks?.find(t => t.layerId === layerId);
+
+    if ((layer.driverMode === 'timeline' || timelineKfId !== undefined || timelineTime !== undefined) && track) {
+        if (timelineKfId) {
+            const tlKf = track.keyframes.find(k => k.id === timelineKfId);
+            if (tlKf && tlKf.strokes && tlKf.strokes.length > 0) {
+                strokesToSearch = tlKf.strokes;
+            }
+        }
+        if (strokesToSearch.length === 0 && timelineTime !== undefined) {
+            strokesToSearch = evaluateLayerTimelineStrokes(
+                track,
+                timelineTime,
+                layer.interpolationMode || 'resample',
+                200,
+                activeAnim?.loopMode || 'loop',
+                activeAnim?.duration || 2.0,
+                layer
+            );
+        }
+    } else if (kfId) {
+        const kf = project.keyframes.find(k => k.id === kfId);
+        if (kf) {
+            const layerState = kf.layerStates.find(ls => ls.layerId === layerId);
+            if (layerState) {
+                strokesToSearch = layerState.strokes;
+            }
+        }
+    }
+
+    if (strokesToSearch.length === 0) {
         // Fallback to layer base style if no strokes exist
         const style = resolveStrokeStyle(undefined, layer);
         return {
@@ -183,9 +290,9 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
     }
 
     // Determine which stroke to read from
-    let targetStroke = layerState.strokes[0]; // Default to first
+    let targetStroke = strokesToSearch[0]; // Default to first
     if (strokeId) {
-        const found = layerState.strokes.find(s => s.id === strokeId);
+        const found = strokesToSearch.find(s => s.id === strokeId);
         if (found) targetStroke = found;
     }
 
@@ -196,7 +303,8 @@ const getHydratedUIProps = (project: Project, layerId: string | null, kfId: stri
         fillColor: style.fillColor,
         brushSize: style.strokeWidth,
         cornerRoundness: style.cornerRoundness,
-        strokeResolution: style.strokeResolution || 200
+        strokeResolution: style.strokeResolution || 200,
+        cornerRadii: targetStroke.shapeConfig?.cornerRadii || targetStroke.style?.cornerRadii
     };
 };
 
@@ -262,15 +370,24 @@ export const useStore = create<StoreState>((set, get) => ({
   setThemeColor: (key, color) => set((state) => ({ ui: { ...state.ui, theme: { ...state.ui.theme, [key]: color } } })),
   closeAllPanels: () => set((state) => ({ ui: { ...state.ui, isSettingsOpen: false, isLayerPanelOpen: false } })),
 
-  setMode: (mode) => set((state) => ({
-    ui: {
+  setMode: (mode) => set((state) => {
+    const activeAnim = state.project.animations?.find(a => a.id === state.ui.activeAnimationId) || state.project.animations?.[0];
+    const duration = activeAnim?.duration || 2.0;
+
+    return {
+      ui: {
         ...state.ui,
         mode,
+        // Start playing the timeline automatically when entering Play mode
+        timelinePlaying: mode === 'play',
+        timelineCurrentTime: (mode === 'play' && state.ui.timelineCurrentTime >= duration - 0.05) ? 0 : state.ui.timelineCurrentTime,
         // Auto-close panels when entering Play mode
         isLayerPanelOpen: mode === 'play' ? false : state.ui.isLayerPanelOpen,
-        isSettingsOpen: mode === 'play' ? false : state.ui.isSettingsOpen
-    }
-  })),
+        isSettingsOpen: mode === 'play' ? false : state.ui.isSettingsOpen,
+        isTimelineOpen: mode === 'play' ? false : state.ui.isTimelineOpen
+      }
+    };
+  }),
 
   undo: () => set((state) => {
     if (state.history.past.length === 0) return state;
@@ -282,7 +399,8 @@ export const useStore = create<StoreState>((set, get) => ({
         previous, 
         state.ui.selectedLayerId, 
         state.ui.selectedKeyframeId, 
-        state.ui.selectedStrokeId
+        state.ui.selectedStrokeId,
+        state.ui.selectedTimelineKeyframeId
     );
 
     return {
@@ -305,7 +423,8 @@ export const useStore = create<StoreState>((set, get) => ({
         next, 
         state.ui.selectedLayerId, 
         state.ui.selectedKeyframeId, 
-        state.ui.selectedStrokeId
+        state.ui.selectedStrokeId,
+        state.ui.selectedTimelineKeyframeId
     );
 
     return {
@@ -395,41 +514,109 @@ export const useStore = create<StoreState>((set, get) => ({
   // If a stroke is selected, these functions update the stroke across ALL keyframes.
   
   setBrushColor: (color) => set((state) => {
-    const newUI = { ...state.ui, brushColor: color };
     const strokeColor = color === 'none' ? 'none' : color;
+    const newUI = { ...state.ui, brushColor: color };
+    const targetStrokeId = state.ui.selectedStrokeId;
+    const targetLayerId = state.ui.selectedLayerId;
+    
+    let newKeyframes = state.project.keyframes;
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    let didChange = false;
 
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
-        const targetStrokeId = state.ui.selectedStrokeId;
-        const targetLayerId = state.ui.selectedLayerId;
-        
-        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
-
-        if (shouldUpdateStrokes) {
-            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-
-            const newKeyframes = state.project.keyframes.map(kf => {
-                if (kf.id !== state.ui.selectedKeyframeId) return kf;
-                return {
-                    ...kf,
-                    layerStates: kf.layerStates.map(ls => {
-                        if (ls.layerId !== targetLayerId) return ls;
-                        return {
-                            ...ls,
-                            strokes: ls.strokes.map(s => {
-                                if (targetStrokeId && s.id !== targetStrokeId) return s;
-                                return { ...s, style: { ...s.style, strokeColor } };
-                            })
-                        };
-                    })
-                };
-            });
-
-            return { 
-               ui: newUI, 
-               project: { ...state.project, keyframes: newKeyframes },
-               history: { past, future: [] }
+    // 1. Update in Matrix Keyframe if keyframe & layer selected
+    if (state.ui.selectedKeyframeId && targetLayerId) {
+        didChange = true;
+        newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== state.ui.selectedKeyframeId) return kf;
+            return {
+                ...kf,
+                layerStates: kf.layerStates.map(ls => {
+                    if (ls.layerId !== targetLayerId) return ls;
+                    return {
+                        ...ls,
+                        strokes: ls.strokes.map(s => {
+                            if (targetStrokeId && s.id !== targetStrokeId) return s;
+                            return { ...s, style: { ...s.style, strokeColor } };
+                        })
+                    };
+                })
             };
-        }
+        });
+    }
+
+    // 2. Update or Auto-Keyframe in Timeline if Timeline is Open or Layer is Timeline Driven
+    const isTimelineMode = state.ui.isTimelineOpen || (targetLayerId && state.project.layers.find(l => l.id === targetLayerId)?.driverMode === 'timeline');
+    if (isTimelineMode && targetLayerId && newAnimations && newAnimations.length > 0) {
+        const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+        const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+        newAnimations = newAnimations.map(anim => {
+            if (anim.id !== activeAnimId) return anim;
+            const tracks = anim.tracks || [];
+            const trackIndex = tracks.findIndex(t => t.layerId === targetLayerId);
+            if (trackIndex < 0) {
+              if (!state.ui.autoKeyframeEnabled) return anim;
+              newTimelineKfId = `kf-tl-${Date.now()}`;
+              const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+              const layerStrokes = matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || [];
+              const clonedStrokes = layerStrokes.map(s => ({
+                  ...s,
+                  id: s.id,
+                  style: targetStrokeId ? (s.id === targetStrokeId ? { ...s.style, strokeColor } : s.style) : { ...s.style, strokeColor }
+              }));
+              const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+              return { ...anim, tracks: [...tracks, { layerId: targetLayerId, keyframes: [newTlKf] }] };
+            }
+            const track = tracks[trackIndex];
+            const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+            if (existingKfIndex >= 0) {
+                didChange = true;
+                const updatedKf = track.keyframes.map((k, idx) => {
+                    if (idx !== existingKfIndex) return k;
+                    return {
+                        ...k,
+                        strokes: (k.strokes || []).map(s => {
+                            if (targetStrokeId && s.id !== targetStrokeId) return s;
+                            return { ...s, style: { ...s.style, strokeColor } };
+                        })
+                    };
+                });
+                return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+            } else if (state.ui.autoKeyframeEnabled) {
+                didChange = true;
+                newTimelineKfId = `kf-tl-${Date.now()}`;
+                const targetLayer = state.project.layers.find(l => l.id === targetLayerId);
+                const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+                const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || []);
+                const clonedStrokes = layerStrokes.map(s => ({
+                    ...s,
+                    id: s.id,
+                    style: targetStrokeId ? (s.id === targetStrokeId ? { ...s.style, strokeColor } : s.style) : { ...s.style, strokeColor }
+                }));
+
+                const newKf: LayerTimelineKeyframe = {
+                    id: newTimelineKfId,
+                    time: targetTime,
+                    strokes: clonedStrokes,
+                    easing: 'easeInOut',
+                    name: `Pose ${targetTime.toFixed(2)}s`
+                };
+                const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+                return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+            }
+            return anim;
+        });
+    }
+
+    if (didChange) {
+        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+        return {
+            ui: { ...newUI, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) },
+            project: { ...state.project, keyframes: newKeyframes, animations: newAnimations },
+            history: { past, future: [] }
+        };
     }
 
     return { ui: newUI };
@@ -437,39 +624,105 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setFillColor: (color) => set((state) => {
     const newUI = { ...state.ui, fillColor: color };
+    const targetStrokeId = state.ui.selectedStrokeId;
+    const targetLayerId = state.ui.selectedLayerId;
     
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
-        const targetStrokeId = state.ui.selectedStrokeId;
-        const targetLayerId = state.ui.selectedLayerId;
-        
-        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
+    let newKeyframes = state.project.keyframes;
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    let didChange = false;
 
-        if (shouldUpdateStrokes) {
-            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-
-            const newKeyframes = state.project.keyframes.map(kf => {
-                if (kf.id !== state.ui.selectedKeyframeId) return kf;
-                return {
-                    ...kf,
-                    layerStates: kf.layerStates.map(ls => {
-                        if (ls.layerId !== targetLayerId) return ls;
-                        return {
-                            ...ls,
-                            strokes: ls.strokes.map(s => {
-                                if (targetStrokeId && s.id !== targetStrokeId) return s;
-                                return { ...s, style: { ...s.style, fillColor: color } };
-                            })
-                        };
-                    })
-                };
-            });
-
-            return { 
-               ui: newUI, 
-               project: { ...state.project, keyframes: newKeyframes },
-               history: { past, future: [] }
+    if (state.ui.selectedKeyframeId && targetLayerId) {
+        didChange = true;
+        newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== state.ui.selectedKeyframeId) return kf;
+            return {
+                ...kf,
+                layerStates: kf.layerStates.map(ls => {
+                    if (ls.layerId !== targetLayerId) return ls;
+                    return {
+                        ...ls,
+                        strokes: ls.strokes.map(s => {
+                            if (targetStrokeId && s.id !== targetStrokeId) return s;
+                            return { ...s, style: { ...s.style, fillColor: color } };
+                        })
+                    };
+                })
             };
-        }
+        });
+    }
+
+    const isTimelineMode = state.ui.isTimelineOpen || (targetLayerId && state.project.layers.find(l => l.id === targetLayerId)?.driverMode === 'timeline');
+    if (isTimelineMode && targetLayerId && newAnimations && newAnimations.length > 0) {
+        const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+        const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+        newAnimations = newAnimations.map(anim => {
+            if (anim.id !== activeAnimId) return anim;
+            const tracks = anim.tracks || [];
+            const trackIndex = tracks.findIndex(t => t.layerId === targetLayerId);
+            if (trackIndex < 0) {
+              if (!state.ui.autoKeyframeEnabled) return anim;
+              newTimelineKfId = `kf-tl-${Date.now()}`;
+              const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+              const layerStrokes = matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || [];
+              const clonedStrokes = layerStrokes.map(s => ({
+                  ...s,
+                  id: s.id,
+                  style: targetStrokeId ? (s.id === targetStrokeId ? { ...s.style, fillColor: color } : s.style) : { ...s.style, fillColor: color }
+              }));
+              const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+              return { ...anim, tracks: [...tracks, { layerId: targetLayerId, keyframes: [newTlKf] }] };
+            }
+            const track = tracks[trackIndex];
+            const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+            if (existingKfIndex >= 0) {
+                didChange = true;
+                const updatedKf = track.keyframes.map((k, idx) => {
+                    if (idx !== existingKfIndex) return k;
+                    return {
+                        ...k,
+                        strokes: (k.strokes || []).map(s => {
+                            if (targetStrokeId && s.id !== targetStrokeId) return s;
+                            return { ...s, style: { ...s.style, fillColor: color } };
+                        })
+                    };
+                });
+                return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+            } else if (state.ui.autoKeyframeEnabled) {
+                didChange = true;
+                newTimelineKfId = `kf-tl-${Date.now()}`;
+                const targetLayer = state.project.layers.find(l => l.id === targetLayerId);
+                const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+                const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || []);
+                const clonedStrokes = layerStrokes.map(s => ({
+                    ...s,
+                    id: s.id,
+                    style: targetStrokeId ? (s.id === targetStrokeId ? { ...s.style, fillColor: color } : s.style) : { ...s.style, fillColor: color }
+                }));
+
+                const newKf: LayerTimelineKeyframe = {
+                    id: newTimelineKfId,
+                    time: targetTime,
+                    strokes: clonedStrokes,
+                    easing: 'easeInOut',
+                    name: `Pose ${targetTime.toFixed(2)}s`
+                };
+                const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+                return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+            }
+            return anim;
+        });
+    }
+
+    if (didChange) {
+        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+        return {
+            ui: { ...newUI, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) },
+            project: { ...state.project, keyframes: newKeyframes, animations: newAnimations },
+            history: { past, future: [] }
+        };
     }
 
     return { ui: newUI };
@@ -477,39 +730,105 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setBrushSize: (size) => set((state) => {
     const newUI = { ...state.ui, brushSize: size };
+    const targetStrokeId = state.ui.selectedStrokeId;
+    const targetLayerId = state.ui.selectedLayerId;
     
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId) {
-        const targetStrokeId = state.ui.selectedStrokeId;
-        const targetLayerId = state.ui.selectedLayerId;
-        
-        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
+    let newKeyframes = state.project.keyframes;
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    let didChange = false;
 
-        if (shouldUpdateStrokes) {
-            const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
-
-            const newKeyframes = state.project.keyframes.map(kf => {
-                if (kf.id !== state.ui.selectedKeyframeId) return kf;
-                return {
-                    ...kf,
-                    layerStates: kf.layerStates.map(ls => {
-                        if (ls.layerId !== targetLayerId) return ls;
-                        return {
-                            ...ls,
-                            strokes: ls.strokes.map(s => {
-                                if (targetStrokeId && s.id !== targetStrokeId) return s;
-                                return { ...s, style: { ...s.style, strokeWidth: size } };
-                            })
-                        };
-                    })
-                };
-            });
-
-            return { 
-               ui: newUI, 
-               project: { ...state.project, keyframes: newKeyframes },
-               history: { past, future: [] }
+    if (state.ui.selectedKeyframeId && targetLayerId) {
+        didChange = true;
+        newKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== state.ui.selectedKeyframeId) return kf;
+            return {
+                ...kf,
+                layerStates: kf.layerStates.map(ls => {
+                    if (ls.layerId !== targetLayerId) return ls;
+                    return {
+                        ...ls,
+                        strokes: ls.strokes.map(s => {
+                            if (targetStrokeId && s.id !== targetStrokeId) return s;
+                            return { ...s, style: { ...s.style, strokeWidth: size } };
+                        })
+                    };
+                })
             };
-        }
+        });
+    }
+
+    const isTimelineMode = state.ui.isTimelineOpen || (targetLayerId && state.project.layers.find(l => l.id === targetLayerId)?.driverMode === 'timeline');
+    if (isTimelineMode && targetLayerId && newAnimations && newAnimations.length > 0) {
+        const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+        const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+        newAnimations = newAnimations.map(anim => {
+            if (anim.id !== activeAnimId) return anim;
+            const tracks = anim.tracks || [];
+            const trackIndex = tracks.findIndex(t => t.layerId === targetLayerId);
+            if (trackIndex < 0) {
+              if (!state.ui.autoKeyframeEnabled) return anim;
+              newTimelineKfId = `kf-tl-${Date.now()}`;
+              const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+              const layerStrokes = matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || [];
+              const clonedStrokes = layerStrokes.map(s => ({
+                  ...s,
+                  id: s.id,
+                  style: targetStrokeId ? (s.id === targetStrokeId ? { ...s.style, strokeWidth: size } : s.style) : { ...s.style, strokeWidth: size }
+              }));
+              const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+              return { ...anim, tracks: [...tracks, { layerId: targetLayerId, keyframes: [newTlKf] }] };
+            }
+            const track = tracks[trackIndex];
+            const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+            if (existingKfIndex >= 0) {
+                didChange = true;
+                const updatedKf = track.keyframes.map((k, idx) => {
+                    if (idx !== existingKfIndex) return k;
+                    return {
+                        ...k,
+                        strokes: (k.strokes || []).map(s => {
+                            if (targetStrokeId && s.id !== targetStrokeId) return s;
+                            return { ...s, style: { ...s.style, strokeWidth: size } };
+                        })
+                    };
+                });
+                return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+            } else if (state.ui.autoKeyframeEnabled) {
+                didChange = true;
+                newTimelineKfId = `kf-tl-${Date.now()}`;
+                const targetLayer = state.project.layers.find(l => l.id === targetLayerId);
+                const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+                const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || []);
+                const clonedStrokes = layerStrokes.map(s => ({
+                    ...s,
+                    id: s.id,
+                    style: targetStrokeId ? (s.id === targetStrokeId ? { ...s.style, strokeWidth: size } : s.style) : { ...s.style, strokeWidth: size }
+                }));
+
+                const newKf: LayerTimelineKeyframe = {
+                    id: newTimelineKfId,
+                    time: targetTime,
+                    strokes: clonedStrokes,
+                    easing: 'easeInOut',
+                    name: `Pose ${targetTime.toFixed(2)}s`
+                };
+                const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+                return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+            }
+            return anim;
+        });
+    }
+
+    if (didChange) {
+        const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+        return {
+            ui: { ...newUI, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) },
+            project: { ...state.project, keyframes: newKeyframes, animations: newAnimations },
+            history: { past, future: [] }
+        };
     }
 
     return { ui: newUI };
@@ -530,7 +849,7 @@ export const useStore = create<StoreState>((set, get) => ({
         };
     });
 
-    // Clear overrides for this property in all strokes of this layer
+    // Bulk update across all matrix keyframes
     const newKeyframes = state.project.keyframes.map(kf => ({
         ...kf,
         layerStates: kf.layerStates.map(ls => {
@@ -549,9 +868,34 @@ export const useStore = create<StoreState>((set, get) => ({
         })
     }));
 
+    // Bulk update across all timeline animations and tracks for this layer!
+    const newAnimations = (state.project.animations || []).map(anim => {
+        if (!anim.tracks) return anim;
+        return {
+            ...anim,
+            tracks: anim.tracks.map(t => {
+                if (t.layerId !== layerId) return t;
+                return {
+                    ...t,
+                    keyframes: t.keyframes.map(k => ({
+                        ...k,
+                        strokes: (k.strokes || []).map(s => {
+                            if (!s.style) return s;
+                            const { strokeColor: _, ...rest } = s.style;
+                            return {
+                                ...s,
+                                style: Object.keys(rest).length > 0 ? rest : undefined
+                            };
+                        })
+                    }))
+                };
+            })
+        };
+    });
+
     return { 
        ui: state.ui.selectedLayerId === layerId ? { ...state.ui, brushColor: color } : state.ui,
-       project: { ...state.project, layers: newLayers, keyframes: newKeyframes },
+       project: { ...state.project, layers: newLayers, keyframes: newKeyframes, animations: newAnimations },
        history: { past, future: [] }
     };
   }),
@@ -570,7 +914,7 @@ export const useStore = create<StoreState>((set, get) => ({
         };
     });
 
-    // Clear overrides for this property in all strokes of this layer
+    // Bulk update across all matrix keyframes
     const newKeyframes = state.project.keyframes.map(kf => ({
         ...kf,
         layerStates: kf.layerStates.map(ls => {
@@ -589,9 +933,34 @@ export const useStore = create<StoreState>((set, get) => ({
         })
     }));
 
+    // Bulk update across all timeline animations and tracks for this layer!
+    const newAnimations = (state.project.animations || []).map(anim => {
+        if (!anim.tracks) return anim;
+        return {
+            ...anim,
+            tracks: anim.tracks.map(t => {
+                if (t.layerId !== layerId) return t;
+                return {
+                    ...t,
+                    keyframes: t.keyframes.map(k => ({
+                        ...k,
+                        strokes: (k.strokes || []).map(s => {
+                            if (!s.style) return s;
+                            const { fillColor: _, ...rest } = s.style;
+                            return {
+                                ...s,
+                                style: Object.keys(rest).length > 0 ? rest : undefined
+                            };
+                        })
+                    }))
+                };
+            })
+        };
+    });
+
     return { 
        ui: state.ui.selectedLayerId === layerId ? { ...state.ui, fillColor: color } : state.ui,
-       project: { ...state.project, layers: newLayers, keyframes: newKeyframes },
+       project: { ...state.project, layers: newLayers, keyframes: newKeyframes, animations: newAnimations },
        history: { past, future: [] }
     };
   }),
@@ -610,7 +979,7 @@ export const useStore = create<StoreState>((set, get) => ({
         };
     });
 
-    // Clear overrides for this property in all strokes of this layer
+    // Bulk update across all matrix keyframes
     const newKeyframes = state.project.keyframes.map(kf => ({
         ...kf,
         layerStates: kf.layerStates.map(ls => {
@@ -629,9 +998,34 @@ export const useStore = create<StoreState>((set, get) => ({
         })
     }));
 
+    // Bulk update across all timeline animations and tracks for this layer!
+    const newAnimations = (state.project.animations || []).map(anim => {
+        if (!anim.tracks) return anim;
+        return {
+            ...anim,
+            tracks: anim.tracks.map(t => {
+                if (t.layerId !== layerId) return t;
+                return {
+                    ...t,
+                    keyframes: t.keyframes.map(k => ({
+                        ...k,
+                        strokes: (k.strokes || []).map(s => {
+                            if (!s.style) return s;
+                            const { strokeWidth: _, ...rest } = s.style;
+                            return {
+                                ...s,
+                                style: Object.keys(rest).length > 0 ? rest : undefined
+                            };
+                        })
+                    }))
+                };
+            })
+        };
+    });
+
     return { 
        ui: state.ui.selectedLayerId === layerId ? { ...state.ui, brushSize: width } : state.ui,
-       project: { ...state.project, layers: newLayers, keyframes: newKeyframes },
+       project: { ...state.project, layers: newLayers, keyframes: newKeyframes, animations: newAnimations },
        history: { past, future: [] }
     };
   }),
@@ -697,17 +1091,20 @@ export const useStore = create<StoreState>((set, get) => ({
     const avg = Math.round((updated.topLeft + updated.topRight + updated.bottomRight + updated.bottomLeft) / 4);
 
     let newKeyframes = state.project.keyframes;
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
+    const targetStrokeId = state.ui.selectedStrokeId;
+    const targetLayerId = state.ui.selectedLayerId;
+
+    if (state.ui.selectedKeyframeId && targetLayerId && targetStrokeId) {
       newKeyframes = state.project.keyframes.map(kf => {
         if (kf.id !== state.ui.selectedKeyframeId) return kf;
         return {
           ...kf,
           layerStates: kf.layerStates.map(ls => {
-            if (ls.layerId !== state.ui.selectedLayerId) return ls;
+            if (ls.layerId !== targetLayerId) return ls;
             return {
               ...ls,
               strokes: ls.strokes.map(s => {
-                if (s.id !== state.ui.selectedStrokeId) return s;
+                if (s.id !== targetStrokeId) return s;
                 return {
                   ...s,
                   style: { ...(s.style || {}), cornerRadii: updated },
@@ -720,9 +1117,80 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    const isTimelineMode = state.ui.isTimelineOpen || (targetLayerId && state.project.layers.find(l => l.id === targetLayerId)?.driverMode === 'timeline');
+
+    if (isTimelineMode && targetLayerId && newAnimations && newAnimations.length > 0) {
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      newAnimations = newAnimations.map(anim => {
+        if (anim.id !== activeAnimId) return anim;
+        const tracks = anim.tracks || [];
+        const trackIndex = tracks.findIndex(t => t.layerId === targetLayerId);
+        if (trackIndex < 0) {
+          if (!state.ui.autoKeyframeEnabled) return anim;
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || [];
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: targetStrokeId ? (s.id === targetStrokeId ? { ...(s.style || {}), cornerRadii: updated } : s.style) : { ...(s.style || {}), cornerRadii: updated },
+            shapeConfig: s.shapeConfig ? (targetStrokeId ? (s.id === targetStrokeId ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig) : { ...s.shapeConfig, cornerRadii: updated }) : s.shapeConfig
+          }));
+          const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+          return { ...anim, tracks: [...tracks, { layerId: targetLayerId, keyframes: [newTlKf] }] };
+        }
+        const track = tracks[trackIndex];
+        const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+        if (existingKfIndex >= 0) {
+          const updatedKf = track.keyframes.map((k, idx) => {
+            if (idx !== existingKfIndex) return k;
+            return {
+              ...k,
+              strokes: (k.strokes || []).map(s => {
+                if (targetStrokeId && s.id !== targetStrokeId) return s;
+                return {
+                  ...s,
+                  style: { ...(s.style || {}), cornerRadii: updated },
+                  shapeConfig: s.shapeConfig ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig
+                };
+              })
+            };
+          });
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+        } else if (state.ui.autoKeyframeEnabled) {
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const targetLayer = state.project.layers.find(l => l.id === targetLayerId);
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || []);
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: targetStrokeId ? (s.id === targetStrokeId ? { ...(s.style || {}), cornerRadii: updated } : s.style) : { ...(s.style || {}), cornerRadii: updated },
+            shapeConfig: s.shapeConfig ? (targetStrokeId ? (s.id === targetStrokeId ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig) : { ...s.shapeConfig, cornerRadii: updated }) : s.shapeConfig
+          }));
+
+          const newKf: LayerTimelineKeyframe = {
+            id: newTimelineKfId,
+            time: targetTime,
+            strokes: clonedStrokes,
+            easing: 'easeInOut',
+            name: `Pose ${targetTime.toFixed(2)}s`
+          };
+          const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+        }
+        return anim;
+      });
+    }
+
     return {
-      ui: { ...state.ui, cornerRadii: updated, cornerRoundness: avg },
-      project: { ...state.project, keyframes: newKeyframes }
+      ui: { ...state.ui, cornerRadii: updated, cornerRoundness: avg, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) },
+      project: { ...state.project, keyframes: newKeyframes, animations: newAnimations }
     };
   }),
 
@@ -738,11 +1206,11 @@ export const useStore = create<StoreState>((set, get) => ({
     const avg = Math.round((updated.topLeft + updated.topRight + updated.bottomRight + updated.bottomLeft) / 4);
 
     let newKeyframes = state.project.keyframes;
-    if (state.ui.selectedKeyframeId && state.ui.selectedLayerId && state.ui.selectedStrokeId) {
-      const strokeId = state.ui.selectedStrokeId;
-      const layerId = state.ui.selectedLayerId;
-      const kfId = state.ui.selectedKeyframeId;
+    const strokeId = state.ui.selectedStrokeId;
+    const layerId = state.ui.selectedLayerId;
+    const kfId = state.ui.selectedKeyframeId;
 
+    if (kfId && layerId && strokeId) {
       let baseStroke: Stroke | undefined;
       for (const k of state.project.keyframes) {
         const ls = k.layerStates.find(l => l.layerId === layerId);
@@ -791,9 +1259,80 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    const isTimelineMode = state.ui.isTimelineOpen || (layerId && state.project.layers.find(l => l.id === layerId)?.driverMode === 'timeline');
+
+    if (isTimelineMode && layerId && newAnimations && newAnimations.length > 0) {
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      newAnimations = newAnimations.map(anim => {
+        if (anim.id !== activeAnimId) return anim;
+        const tracks = anim.tracks || [];
+        let trackIndex = tracks.findIndex(t => t.layerId === layerId);
+        if (trackIndex < 0) {
+          if (!state.ui.autoKeyframeEnabled) return anim;
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = matrixKf?.layerStates.find(ls => ls.layerId === layerId)?.strokes || [];
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: s.id === strokeId ? { ...(s.style || {}), cornerRadii: updated } : s.style,
+            shapeConfig: s.shapeConfig ? (s.id === strokeId ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig) : s.shapeConfig
+          }));
+          const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+          return { ...anim, tracks: [...tracks, { layerId, keyframes: [newTlKf] }] };
+        }
+        const track = tracks[trackIndex];
+        const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+        if (existingKfIndex >= 0) {
+          const updatedKf = track.keyframes.map((k, idx) => {
+            if (idx !== existingKfIndex) return k;
+            return {
+              ...k,
+              strokes: (k.strokes || []).map(s => {
+                if (strokeId && s.id !== strokeId) return s;
+                return {
+                  ...s,
+                  style: { ...(s.style || {}), cornerRadii: updated },
+                  shapeConfig: s.shapeConfig ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig
+                };
+              })
+            };
+          });
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+        } else if (state.ui.autoKeyframeEnabled) {
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const targetLayer = state.project.layers.find(l => l.id === layerId);
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === layerId)?.strokes || []);
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: strokeId ? (s.id === strokeId ? { ...(s.style || {}), cornerRadii: updated } : s.style) : { ...(s.style || {}), cornerRadii: updated },
+            shapeConfig: s.shapeConfig ? (strokeId ? (s.id === strokeId ? { ...s.shapeConfig, cornerRadii: updated } : s.shapeConfig) : { ...s.shapeConfig, cornerRadii: updated }) : s.shapeConfig
+          }));
+
+          const newKf: LayerTimelineKeyframe = {
+            id: newTimelineKfId,
+            time: targetTime,
+            strokes: clonedStrokes,
+            easing: 'easeInOut',
+            name: `Pose ${targetTime.toFixed(2)}s`
+          };
+          const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+        }
+        return anim;
+      });
+    }
+
     return {
-      ui: { ...state.ui, cornerRadii: updated, cornerRoundness: avg },
-      project: { ...state.project, keyframes: newKeyframes }
+      ui: { ...state.ui, cornerRadii: updated, cornerRoundness: avg, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) },
+      project: { ...state.project, keyframes: newKeyframes, animations: newAnimations }
     };
   }),
 
@@ -849,6 +1388,9 @@ export const useStore = create<StoreState>((set, get) => ({
     };
 
     let finalLayers = state.project.layers;
+    if (state.ui.isTimelineOpen && layer?.driverMode !== 'timeline') {
+      finalLayers = finalLayers.map(l => l.id === selectedLayerId ? { ...l, driverMode: 'timeline' as LayerDriverMode } : l);
+    }
     let newKeyframes: Keyframe[];
 
     if (isGuideLayer) {
@@ -900,13 +1442,96 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
+    // Automatically sync shape stroke into Timeline track if Timeline is open or layer is timeline-driven
+    let updatedAnimations = state.project.animations && state.project.animations.length > 0
+      ? state.project.animations
+      : [DEFAULT_ANIMATION];
+    let createdTlKeyframeId: string | null = state.ui.selectedTimelineKeyframeId;
+
+    if (state.ui.isTimelineOpen || layer?.driverMode === 'timeline') {
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || updatedAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      updatedAnimations = updatedAnimations.map(anim => {
+        if (anim.id === activeAnimId) {
+          const tracks = anim.tracks || [];
+          const trackIndex = tracks.findIndex(t => t.layerId === selectedLayerId);
+          let updatedTracks: LayerTimelineTrack[];
+
+          if (trackIndex >= 0) {
+            const track = tracks[trackIndex];
+            const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+            let updatedKf: LayerTimelineKeyframe[];
+
+            if (existingKfIndex >= 0) {
+              const existing = track.keyframes[existingKfIndex];
+              createdTlKeyframeId = existing.id;
+              const currentStrokes = existing.strokes || [];
+              const matchIdx = currentStrokes.findIndex(s => s.id === strokeId);
+              let newStrokes: Stroke[];
+              if (isGuideLayer) {
+                newStrokes = [...currentStrokes, newStroke];
+              } else if (matchIdx >= 0) {
+                newStrokes = currentStrokes.map(s => s.id === strokeId ? newStroke : s);
+              } else {
+                newStrokes = [newStroke];
+              }
+              updatedKf = track.keyframes.map((k, idx) => idx === existingKfIndex ? { ...k, strokes: newStrokes } : k);
+            } else {
+              createdTlKeyframeId = `kf-tl-${Date.now()}`;
+              const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
+              const baseStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, []);
+              const newStrokes = isGuideLayer
+                ? [...baseStrokes, newStroke]
+                : (baseStrokes.some(s => s.id === strokeId)
+                    ? baseStrokes.map(s => s.id === strokeId ? newStroke : s)
+                    : [newStroke]);
+              const newTlKf: LayerTimelineKeyframe = {
+                id: createdTlKeyframeId,
+                time: targetTime,
+                strokes: newStrokes,
+                easing: 'easeInOut',
+                name: `Pose ${targetTime.toFixed(2)}s`
+              };
+              updatedKf = [...track.keyframes, newTlKf].sort((a, b) => a.time - b.time);
+            }
+
+            updatedTracks = tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t);
+          } else {
+            createdTlKeyframeId = `kf-tl-${Date.now()}`;
+            const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
+            const baseStrokes = getTimelineStrokesForTime(undefined, targetTime, targetLayer, anim, []);
+            const newStrokes = isGuideLayer ? [...baseStrokes, newStroke] : [newStroke];
+            const newTlKf: LayerTimelineKeyframe = {
+              id: createdTlKeyframeId,
+              time: targetTime,
+              strokes: newStrokes,
+              easing: 'easeInOut',
+              name: `Pose ${targetTime.toFixed(2)}s`
+            };
+            updatedTracks = [
+              ...tracks,
+              {
+                layerId: selectedLayerId,
+                keyframes: [newTlKf]
+              }
+            ];
+          }
+
+          return { ...anim, tracks: updatedTracks };
+        }
+        return anim;
+      });
+    }
+
     return {
-      project: { ...state.project, layers: finalLayers, keyframes: newKeyframes },
+      project: { ...state.project, layers: finalLayers, keyframes: newKeyframes, animations: updatedAnimations },
       ui: { 
         ...state.ui, 
         selectedKeyframeId: targetKeyframeId,
         selectedStrokeId: strokeId,
-        cornerRadii: config.cornerRadii || state.ui.cornerRadii
+        cornerRadii: config.cornerRadii || state.ui.cornerRadii,
+        ...(createdTlKeyframeId ? { selectedTimelineKeyframeId: createdTlKeyframeId, selectedLayerTrackId: selectedLayerId } : {})
       },
       history: { past, future: [] }
     };
@@ -1155,7 +1780,7 @@ export const useStore = create<StoreState>((set, get) => ({
                 }
             }
         }
-        hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, matchingKfId, newSelectedStrokeId);
+        hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, matchingKfId, newSelectedStrokeId, state.ui.selectedTimelineKeyframeId);
     } else {
         newSelectedStrokeId = null;
     }
@@ -1170,8 +1795,48 @@ export const useStore = create<StoreState>((set, get) => ({
     const newAxes = state.project.axes.map(a => 
        values[a.id] !== undefined ? { ...a, currentValue: Math.max(0, Math.min(1, values[a.id])) } : a
     );
+    
+    // Strict Selection Logic (keeps keyframe selected if we are close)
+    const currentAxisValues: Record<string, number> = {};
+    newAxes.forEach(a => currentAxisValues[a.id] = a.currentValue);
+    
+    let matchingKfId = null;
+    const exactMatch = state.project.keyframes.find(kf => {
+      let dist = 0;
+      for (const id in currentAxisValues) {
+        dist += Math.abs((kf.axisValues[id] || 0) - currentAxisValues[id]);
+      }
+      return dist < 0.02; 
+    });
+
+    if (exactMatch) {
+      matchingKfId = exactMatch.id;
+    }
+
+    let hydratedProps = {};
+    let newSelectedStrokeId = state.ui.selectedStrokeId;
+
+    if (matchingKfId) {
+        if (state.ui.selectedTool === 'select' && state.ui.selectedLayerId) {
+            const kf = state.project.keyframes.find(k => k.id === matchingKfId);
+            const ls = kf?.layerStates.find(s => s.layerId === state.ui.selectedLayerId);
+            if (ls && ls.strokes.length > 0) {
+                 const currentStrokeExists = ls.strokes.find(s => s.id === newSelectedStrokeId);
+                 if (!currentStrokeExists) {
+                     newSelectedStrokeId = ls.strokes[0].id;
+                 }
+            } else {
+                 newSelectedStrokeId = null;
+            }
+        }
+        hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, matchingKfId, newSelectedStrokeId, state.ui.selectedTimelineKeyframeId);
+    } else {
+        newSelectedStrokeId = null;
+    }
+
     return {
-        project: { ...state.project, axes: newAxes }
+        project: { ...state.project, axes: newAxes },
+        ui: { ...state.ui, selectedKeyframeId: matchingKfId, selectedStrokeId: newSelectedStrokeId, ...hydratedProps }
     };
   }),
 
@@ -1221,7 +1886,7 @@ export const useStore = create<StoreState>((set, get) => ({
         }
     }
 
-    const hydratedProps = getHydratedUIProps(state.project, layerId, state.ui.selectedKeyframeId, newSelectedStrokeId);
+    const hydratedProps = getHydratedUIProps(state.project, layerId, state.ui.selectedKeyframeId, newSelectedStrokeId, state.ui.selectedTimelineKeyframeId);
     const targetLayer = state.project.layers.find(l => l.id === layerId);
     let symmetryProps = {};
     if (targetLayer?.symmetry) {
@@ -1247,26 +1912,19 @@ export const useStore = create<StoreState>((set, get) => ({
                 const sameStroke = ls.strokes.find(s => s.id === state.ui.selectedStrokeId);
                 newSelectedStrokeId = sameStroke ? sameStroke.id : ls.strokes[0].id;
             } else {
-                // If this state does not have strokes yet for active layer, check other keyframes
-                if (!newSelectedStrokeId) {
-                    for (const otherKf of state.project.keyframes) {
-                        const otherLs = otherKf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
-                        if (otherLs && otherLs.strokes.length > 0) {
-                            newSelectedStrokeId = otherLs.strokes[0].id;
-                            break;
-                        }
-                    }
-                }
+                newSelectedStrokeId = null;
             }
+        } else {
+            newSelectedStrokeId = null;
         }
     }
 
-    const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, keyframeId, newSelectedStrokeId);
+    const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, keyframeId, newSelectedStrokeId, state.ui.selectedTimelineKeyframeId);
     return { ui: { ...state.ui, selectedKeyframeId: keyframeId, selectedStrokeId: newSelectedStrokeId, ...hydratedProps } };
   }),
   
   selectStroke: (strokeId) => set((state) => {
-     const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, state.ui.selectedKeyframeId, strokeId);
+     const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, state.ui.selectedKeyframeId, strokeId, state.ui.selectedTimelineKeyframeId);
      return { ui: { ...state.ui, selectedStrokeId: strokeId, ...hydratedProps } };
   }),
 
@@ -1402,64 +2060,204 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setLayerCornerRoundness: (layerId, roundness, applyToAllStates = false) => set((state) => {
     const currentKeyframeId = state.ui.selectedKeyframeId;
+    let newKeyframes = state.project.keyframes.map(kf => {
+      if (applyToAllStates) {
+        return {
+          ...kf,
+          layerStates: kf.layerStates.map(ls => 
+            ls.layerId === layerId ? {
+              ...ls,
+              strokes: ls.strokes.map(s => ({
+                ...s,
+                style: { ...s.style, cornerRoundness: undefined }
+              }))
+            } : ls
+          )
+        };
+      } else if (kf.id === currentKeyframeId) {
+        return {
+          ...kf,
+          layerStates: kf.layerStates.map(ls => 
+            ls.layerId === layerId ? {
+              ...ls,
+              strokes: ls.strokes.map(s => ({
+                ...s,
+                style: { ...s.style, cornerRoundness: roundness }
+              }))
+            } : ls
+          )
+        };
+      }
+      return kf;
+    });
+
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    const isTimelineMode = state.ui.isTimelineOpen || (layerId && state.project.layers.find(l => l.id === layerId)?.driverMode === 'timeline');
+
+    if (isTimelineMode && layerId && newAnimations && newAnimations.length > 0) {
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      newAnimations = newAnimations.map(anim => {
+        if (anim.id !== activeAnimId) return anim;
+        const tracks = anim.tracks || [];
+        let trackIndex = tracks.findIndex(t => t.layerId === layerId);
+        if (trackIndex < 0) {
+          if (!state.ui.autoKeyframeEnabled) return anim;
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const targetLayer = state.project.layers.find(l => l.id === layerId);
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = getTimelineStrokesForTime(undefined, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === layerId)?.strokes || []);
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: { ...s.style, cornerRoundness: roundness }
+          }));
+          const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+          return { ...anim, tracks: [...tracks, { layerId, keyframes: [newTlKf] }] };
+        }
+        const track = tracks[trackIndex];
+        const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+        if (existingKfIndex >= 0) {
+          const updatedKf = track.keyframes.map((k, idx) => {
+            if (idx !== existingKfIndex) return k;
+            return {
+              ...k,
+              strokes: (k.strokes || []).map(s => ({
+                ...s,
+                style: { ...s.style, cornerRoundness: roundness }
+              }))
+            };
+          });
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+        } else if (state.ui.autoKeyframeEnabled) {
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const targetLayer = state.project.layers.find(l => l.id === layerId);
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === layerId)?.strokes || []);
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: { ...s.style, cornerRoundness: roundness }
+          }));
+
+          const newKf: LayerTimelineKeyframe = {
+            id: newTimelineKfId,
+            time: targetTime,
+            strokes: clonedStrokes,
+            easing: 'easeInOut',
+            name: `Pose ${targetTime.toFixed(2)}s`
+          };
+          const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+        }
+        return anim;
+      });
+    }
+
     return {
-      ui: state.ui.selectedLayerId === layerId ? { ...state.ui, cornerRoundness: roundness } : state.ui,
+      ui: state.ui.selectedLayerId === layerId ? { ...state.ui, cornerRoundness: roundness, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) } : state.ui,
       project: {
         ...state.project,
         layers: applyToAllStates ? state.project.layers.map(l => 
           l.id === layerId ? { ...l, baseStyle: { ...l.baseStyle, cornerRoundness: roundness } as StyleProps } : l
         ) : state.project.layers,
-        keyframes: state.project.keyframes.map(kf => {
-          if (applyToAllStates) {
-            return {
-              ...kf,
-              layerStates: kf.layerStates.map(ls => 
-                ls.layerId === layerId ? {
-                  ...ls,
-                  strokes: ls.strokes.map(s => ({
-                    ...s,
-                    style: { ...s.style, cornerRoundness: undefined }
-                  }))
-                } : ls
-              )
-            };
-          } else if (kf.id === currentKeyframeId) {
-            return {
-              ...kf,
-              layerStates: kf.layerStates.map(ls => 
-                ls.layerId === layerId ? {
-                  ...ls,
-                  strokes: ls.strokes.map(s => ({
-                    ...s,
-                    style: { ...s.style, cornerRoundness: roundness }
-                  }))
-                } : ls
-              )
-            };
-          }
-          return kf;
-        })
+        keyframes: newKeyframes,
+        animations: newAnimations
       }
     };
   }),
 
   setStrokeCornerRoundness: (strokeId, roundness) => set((state) => {
     const currentKeyframeId = state.ui.selectedKeyframeId;
+    const targetLayerId = state.ui.selectedLayerId;
+
+    let newKeyframes = state.project.keyframes.map(kf => 
+      kf.id === currentKeyframeId ? {
+        ...kf,
+        layerStates: kf.layerStates.map(ls => ({
+          ...ls,
+          strokes: ls.strokes.map(s => 
+            s.id === strokeId ? { ...s, style: { ...s.style, cornerRoundness: roundness } } : s
+          )
+        }))
+      } : kf
+    );
+
+    let newAnimations = state.project.animations;
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+    const isTimelineMode = state.ui.isTimelineOpen || (targetLayerId && state.project.layers.find(l => l.id === targetLayerId)?.driverMode === 'timeline');
+
+    if (isTimelineMode && targetLayerId && newAnimations && newAnimations.length > 0) {
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || newAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      newAnimations = newAnimations.map(anim => {
+        if (anim.id !== activeAnimId) return anim;
+        const tracks = anim.tracks || [];
+        const trackIndex = tracks.findIndex(t => t.layerId === targetLayerId);
+        if (trackIndex < 0) {
+          if (!state.ui.autoKeyframeEnabled) return anim;
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const targetLayer = state.project.layers.find(l => l.id === targetLayerId);
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = getTimelineStrokesForTime(undefined, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || []);
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: s.id === strokeId ? { ...s.style, cornerRoundness: roundness } : s.style
+          }));
+          const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: "easeInOut", name: `Pose ${targetTime.toFixed(2)}s` };
+          return { ...anim, tracks: [...tracks, { layerId: targetLayerId, keyframes: [newTlKf] }] };
+        }
+        const track = tracks[trackIndex];
+        const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+        if (existingKfIndex >= 0) {
+          const updatedKf = track.keyframes.map((k, idx) => {
+            if (idx !== existingKfIndex) return k;
+            return {
+              ...k,
+              strokes: (k.strokes || []).map(s => {
+                if (s.id !== strokeId) return s;
+                return { ...s, style: { ...s.style, cornerRoundness: roundness } };
+              })
+            };
+          });
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+        } else if (state.ui.autoKeyframeEnabled) {
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const targetLayer = state.project.layers.find(l => l.id === targetLayerId);
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, matrixKf?.layerStates.find(ls => ls.layerId === targetLayerId)?.strokes || []);
+          const clonedStrokes = layerStrokes.map(s => ({
+            ...s,
+            id: s.id,
+            style: s.id === strokeId ? { ...s.style, cornerRoundness: roundness } : s.style
+          }));
+
+          const newKf: LayerTimelineKeyframe = {
+            id: newTimelineKfId,
+            time: targetTime,
+            strokes: clonedStrokes,
+            easing: 'easeInOut',
+            name: `Pose ${targetTime.toFixed(2)}s`
+          };
+          const updatedKeyframes = [...track.keyframes, newKf].sort((a, b) => a.time - b.time);
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+        }
+        return anim;
+      });
+    }
+
     return {
-      ui: { ...state.ui, cornerRoundness: roundness },
+      ui: { ...state.ui, cornerRoundness: roundness, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) },
       project: {
         ...state.project,
-        keyframes: state.project.keyframes.map(kf => 
-          kf.id === currentKeyframeId ? {
-            ...kf,
-            layerStates: kf.layerStates.map(ls => ({
-              ...ls,
-              strokes: ls.strokes.map(s => 
-                s.id === strokeId ? { ...s, style: { ...s.style, cornerRoundness: roundness } } : s
-              )
-            }))
-          } : kf
-        )
+        keyframes: newKeyframes,
+        animations: newAnimations
       }
     };
   }),
@@ -1471,7 +2269,7 @@ export const useStore = create<StoreState>((set, get) => ({
         const targetStrokeId = state.ui.selectedStrokeId;
         const targetLayerId = state.ui.selectedLayerId;
         
-        const shouldUpdateStrokes = targetStrokeId !== null || state.ui.selectedTool === 'select';
+        const shouldUpdateStrokes = true;
 
         if (shouldUpdateStrokes) {
             const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
@@ -1638,6 +2436,9 @@ export const useStore = create<StoreState>((set, get) => ({
     };
 
     let finalLayers = updatedLayers;
+    if (state.ui.isTimelineOpen && layer?.driverMode !== 'timeline') {
+      finalLayers = finalLayers.map(l => l.id === selectedLayerId ? { ...l, driverMode: 'timeline' as LayerDriverMode } : l);
+    }
     let newKeyframes: Keyframe[];
 
     if (isGuideLayer) {
@@ -1691,10 +2492,88 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
+    // Automatically sync into Timeline track if Timeline is open or layer is timeline-driven
+    let updatedAnimations = state.project.animations && state.project.animations.length > 0
+      ? state.project.animations
+      : [DEFAULT_ANIMATION];
+    let createdTlKeyframeId: string | null = state.ui.selectedTimelineKeyframeId;
+
+    if (state.ui.isTimelineOpen || layer?.driverMode === 'timeline') {
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || updatedAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      updatedAnimations = updatedAnimations.map(anim => {
+        if (anim.id === activeAnimId) {
+          const tracks = anim.tracks || [];
+          const trackIndex = tracks.findIndex(t => t.layerId === selectedLayerId);
+          let updatedTracks: LayerTimelineTrack[];
+
+          if (trackIndex >= 0) {
+            const track = tracks[trackIndex];
+            const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+            let updatedKf: LayerTimelineKeyframe[];
+
+            if (existingKfIndex >= 0) {
+              const existing = track.keyframes[existingKfIndex];
+              createdTlKeyframeId = existing.id;
+              const newStrokes = isGuideLayer ? [...(existing.strokes || []), newStroke] : [newStroke];
+              updatedKf = track.keyframes.map((k, idx) => idx === existingKfIndex ? { ...k, strokes: newStrokes } : k);
+            } else {
+              createdTlKeyframeId = `kf-tl-${Date.now()}`;
+              const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
+              const baseStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, []);
+              const newStrokes = isGuideLayer
+                ? [...baseStrokes, newStroke]
+                : (baseStrokes.some(s => s.id === strokeId)
+                    ? baseStrokes.map(s => s.id === strokeId ? newStroke : s)
+                    : [newStroke]);
+              const newTlKf: LayerTimelineKeyframe = {
+                id: createdTlKeyframeId,
+                time: targetTime,
+                strokes: newStrokes,
+                easing: 'easeInOut',
+                name: `Pose ${targetTime.toFixed(2)}s`
+              };
+              updatedKf = [...track.keyframes, newTlKf].sort((a, b) => a.time - b.time);
+            }
+
+            updatedTracks = tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t);
+          } else {
+            createdTlKeyframeId = `kf-tl-${Date.now()}`;
+            const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
+            const baseStrokes = getTimelineStrokesForTime(undefined, targetTime, targetLayer, anim, []);
+            const newStrokes = isGuideLayer ? [...baseStrokes, newStroke] : [newStroke];
+            const newTlKf: LayerTimelineKeyframe = {
+              id: createdTlKeyframeId,
+              time: targetTime,
+              strokes: newStrokes,
+              easing: 'easeInOut',
+              name: `Pose ${targetTime.toFixed(2)}s`
+            };
+            updatedTracks = [
+              ...tracks,
+              {
+                layerId: selectedLayerId,
+                keyframes: [newTlKf]
+              }
+            ];
+          }
+
+          return { ...anim, tracks: updatedTracks };
+        }
+        return anim;
+      });
+    }
+
     return { 
-      project: { ...state.project, keyframes: newKeyframes, layers: finalLayers },
+      project: { ...state.project, keyframes: newKeyframes, layers: finalLayers, animations: updatedAnimations },
       // AUTO-SELECT THE NEWLY CREATED STROKE to enable "Direct Select" workflow
-      ui: { ...state.ui, selectedKeyframeId: targetKeyframeId, selectedStrokeId: newStroke.id },
+      ui: { 
+        ...state.ui, 
+        selectedKeyframeId: targetKeyframeId, 
+        selectedStrokeId: newStroke.id,
+        ...(createdTlKeyframeId ? { selectedTimelineKeyframeId: createdTlKeyframeId, selectedLayerTrackId: selectedLayerId } : {})
+      },
       history: { past, future: [] }
     };
   }),
@@ -1769,8 +2648,90 @@ export const useStore = create<StoreState>((set, get) => ({
       return kf;
     });
 
-    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    // Also update in Timeline track if timeline is open or layer is timeline driven
     let updatedLayers = state.project.layers;
+    let updatedAnimations = state.project.animations;
+    const isTimelineMode = state.ui.isTimelineOpen || (layerId && state.project.layers.find(l => l.id === layerId)?.driverMode === 'timeline');
+    let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
+
+    if (isTimelineMode && updatedAnimations && updatedAnimations.length > 0) {
+      if (layerId) {
+        updatedLayers = updatedLayers.map(l => l.id === layerId && l.driverMode !== 'timeline' ? { ...l, driverMode: 'timeline' as LayerDriverMode } : l);
+      }
+      const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || updatedAnimations[0].id;
+      const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
+
+      updatedAnimations = updatedAnimations.map(anim => {
+        if (anim.id !== activeAnimId) return anim;
+        const tracks = anim.tracks || [];
+        let trackIndex = tracks.findIndex(t => t.layerId === layerId);
+        if (trackIndex < 0) {
+          if (!state.ui.autoKeyframeEnabled) return anim;
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = matrixKf?.layerStates.find(ls => ls.layerId === layerId)?.strokes || [];
+          const clonedStrokes = layerStrokes.some(s => s.id === strokeId)
+            ? layerStrokes.map(s => s.id === strokeId ? { ...s, points: newPoints, shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig } : s)
+            : [...layerStrokes, {
+                id: strokeId,
+                points: newPoints,
+                closed: baseStroke?.closed ?? false,
+                style: baseStroke?.style,
+                shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+              }];
+          const newTlKf: LayerTimelineKeyframe = { id: newTimelineKfId, time: targetTime, strokes: clonedStrokes, easing: 'easeInOut', name: `Pose ${targetTime.toFixed(2)}s` };
+          return { ...anim, tracks: [...tracks, { layerId, keyframes: [newTlKf] }] };
+        }
+
+        const track = tracks[trackIndex];
+        const existingKfIndex = track.keyframes.findIndex(k => Math.abs(k.time - targetTime) <= 0.03);
+
+        if (existingKfIndex >= 0) {
+          const updatedKf = track.keyframes.map((k, idx) => {
+            if (idx !== existingKfIndex) return k;
+            return {
+              ...k,
+              strokes: (k.strokes || []).map(s => {
+                if (s.id !== strokeId) return s;
+                return {
+                  ...s,
+                  points: newPoints,
+                  shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig
+                };
+              })
+            };
+          });
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t) };
+        } else if (state.ui.autoKeyframeEnabled) {
+          newTimelineKfId = `kf-tl-${Date.now()}`;
+          const refKf = track.keyframes.find(k => k.id === state.ui.selectedTimelineKeyframeId) || track.keyframes[0];
+          const matrixKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+          const layerStrokes = refKf?.strokes || matrixKf?.layerStates.find(ls => ls.layerId === layerId)?.strokes || [];
+          const clonedStrokes = layerStrokes.some(s => s.id === strokeId)
+            ? layerStrokes.map(s => s.id === strokeId ? { ...s, points: newPoints, shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig } : s)
+            : [...layerStrokes, {
+                id: strokeId,
+                points: newPoints,
+                closed: baseStroke?.closed ?? false,
+                style: baseStroke?.style,
+                shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+              }];
+
+          const newTlKf: LayerTimelineKeyframe = {
+            id: newTimelineKfId,
+            time: targetTime,
+            strokes: clonedStrokes,
+            easing: 'easeInOut',
+            name: `Pose ${targetTime.toFixed(2)}s`
+          };
+          const updatedKeyframes = [...track.keyframes, newTlKf].sort((a, b) => a.time - b.time);
+          return { ...anim, tracks: tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKeyframes } : t) };
+        }
+        return anim;
+      });
+    }
+
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
     if (targetLayer?.isGuide) {
       updatedLayers = state.project.layers.map(l => {
         if (l.id === layerId && l.guideStrokes) {
@@ -1783,7 +2744,10 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
-    return { project: { ...state.project, layers: updatedLayers, keyframes }};
+    return { 
+      project: { ...state.project, layers: updatedLayers, keyframes, animations: updatedAnimations },
+      ui: { ...state.ui, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) }
+    };
   }),
   
   deleteStroke: (strokeId) => set((state) => {
@@ -1824,6 +2788,35 @@ export const useStore = create<StoreState>((set, get) => ({
          return kf;
      });
 
+     // 1.b Also remove stroke from timeline tracks for the active keyframe only
+     let updatedAnimations = state.project.animations;
+     if (updatedAnimations && updatedAnimations.length > 0 && (state.ui.isTimelineOpen || targetLayer?.driverMode === 'timeline')) {
+       const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || updatedAnimations[0].id;
+       const targetTime = state.ui.timelineCurrentTime ?? 0;
+       const targetTlKfId = state.ui.selectedTimelineKeyframeId;
+
+       updatedAnimations = updatedAnimations.map(anim => {
+         if (anim.id !== activeAnimId) return anim;
+         return {
+           ...anim,
+           tracks: (anim.tracks || []).map(track => {
+             if (track.layerId !== layerId) return track;
+             return {
+               ...track,
+               keyframes: track.keyframes.map(k => {
+                 const isTarget = targetTlKfId ? k.id === targetTlKfId : Math.abs(k.time - targetTime) <= 0.03;
+                 if (!isTarget) return k;
+                 return {
+                   ...k,
+                   strokes: (k.strokes || []).filter(s => s.id !== strokeId)
+                 };
+               })
+             };
+           })
+         };
+       });
+     }
+
      // 2. Check if the target keyframe now has 0 strokes across ALL layers
      const targetKf = newKeyframes.find(k => k.id === kfId);
      const hasAnyStrokesLeft = targetKf?.layerStates.some(ls => ls.strokes.length > 0);
@@ -1852,7 +2845,7 @@ export const useStore = create<StoreState>((set, get) => ({
      }
 
      return {
-         project: { ...state.project, layers: updatedLayers, keyframes: newKeyframes, axes: newAxes },
+         project: { ...state.project, layers: updatedLayers, keyframes: newKeyframes, axes: newAxes, animations: updatedAnimations },
          ui: { ...state.ui, selectedKeyframeId: newSelectedId, selectedStrokeId: null },
          history: { past, future: [] }
      };
@@ -2134,6 +3127,724 @@ export const useStore = create<StoreState>((set, get) => ({
               history: { past, future: [] }
           };
       }
-  })
+  }),
+
+  // ==========================================
+  // MODE EXPERT & TIMELINES ACTIONS
+  // ==========================================
+  toggleExpertMode: () => set((state) => {
+    const willEnable = !state.ui.expertModeEnabled;
+    const animations = state.project.animations && state.project.animations.length > 0 
+      ? state.project.animations 
+      : [DEFAULT_ANIMATION];
+    const activeAnimId = state.project.activeAnimationId || animations[0]?.id || 'anim-default';
+
+    return {
+      project: {
+        ...state.project,
+        animations,
+        activeAnimationId: activeAnimId
+      },
+      ui: { 
+        ...state.ui, 
+        expertModeEnabled: willEnable,
+        isTimelineOpen: willEnable,
+        activeAnimationId: activeAnimId,
+        timelinePlaying: willEnable ? state.ui.timelinePlaying : false
+      }
+    };
+  }),
+
+  setExpertMode: (enabled: boolean) => set((state) => {
+    const animations = state.project.animations && state.project.animations.length > 0 
+      ? state.project.animations 
+      : [DEFAULT_ANIMATION];
+    const activeAnimId = state.project.activeAnimationId || animations[0]?.id || 'anim-default';
+
+    return {
+      project: {
+        ...state.project,
+        animations,
+        activeAnimationId: activeAnimId
+      },
+      ui: { 
+        ...state.ui, 
+        expertModeEnabled: enabled,
+        isTimelineOpen: enabled ? state.ui.isTimelineOpen : false,
+        activeAnimationId: activeAnimId,
+        timelinePlaying: enabled ? state.ui.timelinePlaying : false
+      }
+    };
+  }),
+
+  toggleTimelinePanel: () => set((state) => ({
+    ui: { ...state.ui, isTimelineOpen: !state.ui.isTimelineOpen }
+  })),
+
+  toggleInteractionsPanel: () => set((state) => ({
+    ui: { ...state.ui, isInteractionsOpen: !state.ui.isInteractionsOpen }
+  })),
+
+  setActiveAnimation: (id: string) => set((state) => ({
+    ui: { ...state.ui, activeAnimationId: id, timelineCurrentTime: 0, timelinePlaying: false },
+    project: { ...state.project, activeAnimationId: id }
+  })),
+
+  addAnimation: (name?: string) => set((state) => {
+    const existing = state.project.animations || [];
+    const newId = `anim-${Date.now()}`;
+    const newAnim: AnimationTimeline = {
+      id: newId,
+      name: name || `Animation ${existing.length + 1}`,
+      duration: 2.0,
+      loopMode: 'loop',
+      fps: 30,
+      markers: [
+        {
+          id: `marker-${Date.now()}-1`,
+          time: 0.0,
+          axisValues: { 'axis-x': 0.5, 'axis-y': 0.5 },
+          easing: 'easeInOut',
+          name: 'Start'
+        },
+        {
+          id: `marker-${Date.now()}-2`,
+          time: 2.0,
+          axisValues: { 'axis-x': 0.5, 'axis-y': 0.5 },
+          easing: 'easeInOut',
+          name: 'End'
+        }
+      ]
+    };
+
+    return {
+      project: {
+        ...state.project,
+        animations: [...existing, newAnim],
+        activeAnimationId: newId
+      },
+      ui: {
+        ...state.ui,
+        activeAnimationId: newId,
+        timelineCurrentTime: 0,
+        timelinePlaying: false,
+        selectedMarkerId: newAnim.markers[0].id
+      }
+    };
+  }),
+
+  deleteAnimation: (id: string) => set((state) => {
+    const existing = state.project.animations || [];
+    const filtered = existing.filter(a => a.id !== id);
+    const nextActiveId = filtered.length > 0 ? filtered[0].id : null;
+    return {
+      project: {
+        ...state.project,
+        animations: filtered,
+        activeAnimationId: nextActiveId
+      },
+      ui: {
+        ...state.ui,
+        activeAnimationId: nextActiveId,
+        timelineCurrentTime: 0,
+        timelinePlaying: false,
+        selectedMarkerId: null
+      }
+    };
+  }),
+
+  renameAnimation: (id: string, name: string) => set((state) => {
+    const existing = state.project.animations || [];
+    const updated = existing.map(a => a.id === id ? { ...a, name } : a);
+    return { project: { ...state.project, animations: updated } };
+  }),
+
+  setAnimationDuration: (id: string, duration: number) => set((state) => {
+    const validDuration = Math.max(0.2, Number(duration) || 1.0);
+    const existing = state.project.animations || [];
+    const updated = existing.map(a => {
+      if (a.id === id) {
+        // Adjust markers if necessary
+        const markers = a.markers.map(m => ({
+          ...m,
+          time: Math.min(validDuration, m.time)
+        }));
+        return { ...a, duration: validDuration, markers };
+      }
+      return a;
+    });
+    return {
+      project: { ...state.project, animations: updated },
+      ui: { ...state.ui, timelineCurrentTime: Math.min(state.ui.timelineCurrentTime, validDuration) }
+    };
+  }),
+
+  setAnimationLoopMode: (id: string, loopMode: LoopMode) => set((state) => {
+    const existing = state.project.animations || [];
+    const updated = existing.map(a => a.id === id ? { ...a, loopMode } : a);
+    return { project: { ...state.project, animations: updated } };
+  }),
+
+  setTimelineCurrentTime: (time: number) => set((state) => {
+    const activeAnim = state.project.animations?.find(a => a.id === (state.ui.activeAnimationId || state.project.activeAnimationId));
+    const maxDur = activeAnim ? activeAnim.duration : 10.0;
+    const clampedTime = Math.max(0, Math.min(maxDur, time));
+
+    const layerId = state.ui.selectedLayerId;
+    let matchKfId: string | null = null;
+    let newSelectedStrokeId = state.ui.selectedStrokeId;
+
+    if (layerId && activeAnim && activeAnim.tracks) {
+      const track = activeAnim.tracks.find(t => t.layerId === layerId);
+      if (track && track.keyframes && track.keyframes.length > 0) {
+        const matchKf = track.keyframes.find(k => Math.abs(k.time - clampedTime) <= 0.03);
+        if (matchKf) {
+          matchKfId = matchKf.id;
+          if (matchKf.strokes && matchKf.strokes.length > 0) {
+            const sameStroke = matchKf.strokes.find(s => s.id === state.ui.selectedStrokeId);
+            newSelectedStrokeId = sameStroke ? sameStroke.id : matchKf.strokes[0].id;
+          } else {
+            newSelectedStrokeId = null;
+          }
+        } else {
+          const targetLayer = state.project.layers.find(l => l.id === layerId);
+          const evalStrokes = evaluateLayerTimelineStrokes(
+            track,
+            clampedTime,
+            targetLayer?.interpolationMode || 'resample',
+            200,
+            activeAnim.loopMode || 'loop',
+            activeAnim.duration || 2.0,
+            targetLayer
+          );
+          if (evalStrokes && evalStrokes.length > 0) {
+            const sameStroke = evalStrokes.find(s => s.id === state.ui.selectedStrokeId);
+            newSelectedStrokeId = sameStroke ? sameStroke.id : evalStrokes[0].id;
+          } else {
+            newSelectedStrokeId = null;
+          }
+        }
+      }
+    }
+
+    const hydrated = getHydratedUIProps(
+      state.project,
+      layerId,
+      state.ui.selectedKeyframeId,
+      newSelectedStrokeId,
+      matchKfId,
+      clampedTime
+    );
+
+    return {
+      ui: {
+        ...state.ui,
+        timelineCurrentTime: clampedTime,
+        selectedTimelineKeyframeId: matchKfId,
+        selectedStrokeId: newSelectedStrokeId,
+        ...hydrated
+      }
+    };
+  }),
+
+  setTimelinePlaying: (playing: boolean) => set((state) => ({
+    ui: { ...state.ui, timelinePlaying: playing }
+  })),
+
+  addTimelineMarker: (animationId: string, time: number, keyframeId?: string, axisValues?: Record<string, number>, easing: EasingType = 'easeInOut') => set((state) => {
+    const existing = state.project.animations || [];
+    const currentAxisValues = axisValues || {};
+    if (!axisValues) {
+      state.project.axes.forEach(a => {
+        currentAxisValues[a.id] = a.currentValue;
+      });
+    }
+
+    const newMarkerId = `marker-${Date.now()}`;
+    const linkedKf = keyframeId ? state.project.keyframes.find(k => k.id === keyframeId) : null;
+    const finalAxisValues = linkedKf ? { ...linkedKf.axisValues } : currentAxisValues;
+    const name = linkedKf ? linkedKf.name : `Pose at ${time.toFixed(1)}s`;
+
+    const newMarker: TimelineKeyframeMarker = {
+      id: newMarkerId,
+      time: Math.round(time * 100) / 100,
+      keyframeId,
+      axisValues: finalAxisValues,
+      easing,
+      name
+    };
+
+    const updated = existing.map(a => {
+      if (a.id === animationId) {
+        const markers = [...a.markers, newMarker].sort((m1, m2) => m1.time - m2.time);
+        return { ...a, markers };
+      }
+      return a;
+    });
+
+    return {
+      project: { ...state.project, animations: updated },
+      ui: { ...state.ui, selectedMarkerId: newMarkerId, timelineCurrentTime: newMarker.time }
+    };
+  }),
+
+  updateTimelineMarker: (animationId: string, markerId: string, updates: Partial<TimelineKeyframeMarker>) => set((state) => {
+    const existing = state.project.animations || [];
+    const updated = existing.map(a => {
+      if (a.id === animationId) {
+        const markers = a.markers.map(m => {
+          if (m.id === markerId) {
+            const updatedMarker = { ...m, ...updates };
+            if (updates.keyframeId) {
+              const kf = state.project.keyframes.find(k => k.id === updates.keyframeId);
+              if (kf) {
+                updatedMarker.axisValues = { ...kf.axisValues };
+                updatedMarker.name = kf.name;
+              }
+            }
+            return updatedMarker;
+          }
+          return m;
+        }).sort((m1, m2) => m1.time - m2.time);
+        return { ...a, markers };
+      }
+      return a;
+    });
+
+    return { project: { ...state.project, animations: updated } };
+  }),
+
+  deleteTimelineMarker: (animationId: string, markerId: string) => set((state) => {
+    const existing = state.project.animations || [];
+    const updated = existing.map(a => {
+      if (a.id === animationId) {
+        const markers = a.markers.filter(m => m.id !== markerId);
+        return { ...a, markers };
+      }
+      return a;
+    });
+
+    return {
+      project: { ...state.project, animations: updated },
+      ui: { ...state.ui, selectedMarkerId: state.ui.selectedMarkerId === markerId ? null : state.ui.selectedMarkerId }
+    };
+  }),
+
+  setSelectedMarker: (markerId: string | null) => set((state) => {
+    const activeAnim = state.project.animations?.find(a => a.id === state.ui.activeAnimationId);
+    const marker = activeAnim?.markers.find(m => m.id === markerId);
+    return {
+      ui: {
+        ...state.ui,
+        selectedMarkerId: markerId,
+        ...(marker ? { timelineCurrentTime: marker.time } : {})
+      }
+    };
+  }),
+
+  // ==========================================
+  // LAYER TIMELINE TRACKS (MULTI-LAYER KEYFRAMING)
+  // ==========================================
+  setLayerDriverMode: (layerId: string, mode: LayerDriverMode) => set((state) => {
+    const updatedLayers = state.project.layers.map(l => 
+      l.id === layerId ? { ...l, driverMode: mode } : l
+    );
+
+    // If switching to timeline, ensure every animation has a track for this layer
+    let updatedAnimations = state.project.animations && state.project.animations.length > 0 
+      ? state.project.animations 
+      : [DEFAULT_ANIMATION];
+
+    if (mode === 'timeline') {
+      updatedAnimations = updatedAnimations.map(anim => {
+        const existingTracks = anim.tracks || [];
+        const hasTrack = existingTracks.some(t => t.layerId === layerId);
+        if (hasTrack) return anim;
+
+        const newTrack: LayerTimelineTrack = {
+          layerId,
+          keyframes: []
+        };
+        return { ...anim, tracks: [...existingTracks, newTrack] };
+      });
+    }
+
+    return {
+      project: {
+        ...state.project,
+        layers: updatedLayers,
+        animations: updatedAnimations
+      },
+      ui: {
+        ...state.ui,
+        selectedLayerTrackId: mode === 'timeline' ? layerId : state.ui.selectedLayerTrackId,
+        isTimelineOpen: mode === 'matrix' ? false : state.ui.isTimelineOpen
+      }
+    };
+  }),
+
+  addLayerTimelineKeyframe: (layerId: string, time?: number, easing: EasingType = 'easeInOut') => set((state) => {
+    const targetTime = time !== undefined ? time : state.ui.timelineCurrentTime;
+    const animations = state.project.animations && state.project.animations.length > 0 
+      ? state.project.animations 
+      : [DEFAULT_ANIMATION];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || animations[0].id;
+    
+    // Grab current strokes for this layer
+    const activeKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+    const layerState = activeKf?.layerStates.find(ls => ls.layerId === layerId);
+    const strokes = layerState?.strokes ? JSON.parse(JSON.stringify(layerState.strokes)) : [];
+
+    const newKeyframeId = `kf-tl-${Date.now()}`;
+    const newKeyframe: LayerTimelineKeyframe = {
+      id: newKeyframeId,
+      time: Math.round(targetTime * 100) / 100,
+      strokes,
+      easing,
+      name: `Pose ${targetTime.toFixed(1)}s`
+    };
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId) {
+        const tracks = anim.tracks || [];
+        let trackIndex = tracks.findIndex(t => t.layerId === layerId);
+        let updatedTracks: LayerTimelineTrack[];
+
+        if (trackIndex >= 0) {
+          const track = tracks[trackIndex];
+          const existingKf = track.keyframes.filter(k => Math.abs(k.time - newKeyframe.time) > 0.01);
+          const updatedKf = [...existingKf, newKeyframe].sort((a, b) => a.time - b.time);
+          updatedTracks = tracks.map((t, idx) => idx === trackIndex ? { ...t, keyframes: updatedKf } : t);
+        } else {
+          updatedTracks = [
+            ...tracks,
+            {
+              layerId,
+              keyframes: [newKeyframe]
+            }
+          ];
+        }
+
+        return { ...anim, tracks: updatedTracks };
+      }
+      return anim;
+    });
+
+    const updatedLayers = state.project.layers.map(l => 
+      l.id === layerId ? { ...l, driverMode: 'timeline' as LayerDriverMode } : l
+    );
+
+    return {
+      project: { ...state.project, animations: updatedAnimations, layers: updatedLayers },
+      ui: { 
+        ...state.ui, 
+        selectedLayerTrackId: layerId, 
+        selectedTimelineKeyframeId: newKeyframeId,
+        timelineCurrentTime: newKeyframe.time
+      }
+    };
+  }),
+
+  updateLayerTimelineKeyframe: (layerId: string, keyframeId: string, updates: Partial<LayerTimelineKeyframe>) => set((state) => {
+    const animations = state.project.animations || [];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || animations[0]?.id;
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId && anim.tracks) {
+        const tracks = anim.tracks.map(t => {
+          if (t.layerId === layerId) {
+            const keyframes = t.keyframes.map(k => {
+              if (k.id === keyframeId) {
+                return { ...k, ...updates };
+              }
+              return k;
+            }).sort((a, b) => a.time - b.time);
+            return { ...t, keyframes };
+          }
+          return t;
+        });
+        return { ...anim, tracks };
+      }
+      return anim;
+    });
+
+    return { project: { ...state.project, animations: updatedAnimations } };
+  }),
+
+  toggleAutoKeyframe: () => set((state) => ({
+    ui: { ...state.ui, autoKeyframeEnabled: !state.ui.autoKeyframeEnabled }
+  })),
+
+  setAutoKeyframe: (enabled: boolean) => set((state) => ({
+    ui: { ...state.ui, autoKeyframeEnabled: enabled }
+  })),
+
+  moveLayerTimelineKeyframe: (layerId: string, keyframeId: string, newTime: number) => set((state) => {
+    const animations = state.project.animations || [];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || animations[0]?.id;
+    const activeAnim = animations.find(a => a.id === activeAnimId);
+    const maxDuration = activeAnim?.duration || 2.0;
+    const clampedTime = Math.max(0, Math.min(maxDuration, Math.round(newTime * 100) / 100));
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId && anim.tracks) {
+        const tracks = anim.tracks.map(t => {
+          if (t.layerId === layerId) {
+            const keyframes = t.keyframes.map(k => {
+              if (k.id === keyframeId) {
+                return { ...k, time: clampedTime, name: `Pose ${clampedTime.toFixed(2)}s` };
+              }
+              return k;
+            }).sort((a, b) => a.time - b.time);
+            return { ...t, keyframes };
+          }
+          return t;
+        });
+        return { ...anim, tracks };
+      }
+      return anim;
+    });
+
+    return {
+      project: { ...state.project, animations: updatedAnimations },
+      ui: { 
+        ...state.ui, 
+        timelineCurrentTime: clampedTime, 
+        selectedTimelineKeyframeId: keyframeId, 
+        selectedLayerTrackId: layerId 
+      }
+    };
+  }),
+
+  updateLayerTimelineKeyframeEasing: (layerId: string, keyframeId: string, easing: EasingType) => set((state) => {
+    const animations = state.project.animations || [];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || animations[0]?.id;
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId && anim.tracks) {
+        const tracks = anim.tracks.map(t => {
+          if (t.layerId === layerId) {
+            const keyframes = t.keyframes.map(k => {
+              if (k.id === keyframeId) {
+                return { ...k, easing };
+              }
+              return k;
+            });
+            return { ...t, keyframes };
+          }
+          return t;
+        });
+        return { ...anim, tracks };
+      }
+      return anim;
+    });
+
+    return { project: { ...state.project, animations: updatedAnimations } };
+  }),
+
+  deleteLayerTimelineKeyframe: (layerId: string, keyframeId: string) => set((state) => {
+    const animations = state.project.animations || [];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || animations[0]?.id;
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId && anim.tracks) {
+        const tracks = anim.tracks.map(t => {
+          if (t.layerId === layerId) {
+            return {
+              ...t,
+              keyframes: t.keyframes.filter(k => k.id !== keyframeId)
+            };
+          }
+          return t;
+        });
+        return { ...anim, tracks };
+      }
+      return anim;
+    });
+
+    return {
+      project: { ...state.project, animations: updatedAnimations },
+      ui: {
+        ...state.ui,
+        selectedTimelineKeyframeId: state.ui.selectedTimelineKeyframeId === keyframeId ? null : state.ui.selectedTimelineKeyframeId
+      }
+    };
+  }),
+
+  duplicateLayerTimelineKeyframe: (layerId: string, keyframeId: string, newTime?: number) => set((state) => {
+    const animations = state.project.animations || [];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || animations[0]?.id;
+    const activeAnim = animations.find(a => a.id === activeAnimId);
+    const maxDuration = activeAnim?.duration || 2.0;
+
+    const newKfId = `kf-tl-${Date.now()}`;
+    let finalTargetTime = newTime;
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId && anim.tracks) {
+        const tracks = anim.tracks.map(t => {
+          if (t.layerId === layerId) {
+            const sourceKf = t.keyframes.find(k => k.id === keyframeId);
+            if (!sourceKf) return t;
+
+            if (finalTargetTime === undefined) {
+              finalTargetTime = Math.min(maxDuration, Math.round((sourceKf.time + 0.2) * 100) / 100);
+            }
+            finalTargetTime = Math.max(0, Math.min(maxDuration, Math.round(finalTargetTime * 100) / 100));
+
+            const clonedKf: LayerTimelineKeyframe = {
+              id: newKfId,
+              time: finalTargetTime,
+              strokes: JSON.parse(JSON.stringify(sourceKf.strokes || [])),
+              easing: sourceKf.easing || 'easeInOut',
+              name: `${sourceKf.name || 'Pose'} (copie)`
+            };
+
+            const existingWithoutTarget = t.keyframes.filter(k => Math.abs(k.time - finalTargetTime!) > 0.01);
+            const updatedKeyframes = [...existingWithoutTarget, clonedKf].sort((a, b) => a.time - b.time);
+
+            return { ...t, keyframes: updatedKeyframes };
+          }
+          return t;
+        });
+        return { ...anim, tracks };
+      }
+      return anim;
+    });
+
+    return {
+      project: { ...state.project, animations: updatedAnimations },
+      ui: {
+        ...state.ui,
+        selectedTimelineKeyframeId: newKfId,
+        selectedLayerTrackId: layerId,
+        timelineCurrentTime: finalTargetTime !== undefined ? finalTargetTime : state.ui.timelineCurrentTime
+      }
+    };
+  }),
+
+  setSelectedLayerTrack: (layerId: string | null) => set((state) => ({
+    ui: { ...state.ui, selectedLayerTrackId: layerId }
+  })),
+
+  setSelectedTimelineKeyframe: (layerId: string | null, keyframeId: string | null) => set((state) => {
+    const animations = state.project.animations || [];
+    const activeAnim = animations.find(a => a.id === (state.ui.activeAnimationId || state.project.activeAnimationId));
+    const track = activeAnim?.tracks?.find(t => t.layerId === layerId);
+    const kf = track?.keyframes.find(k => k.id === keyframeId);
+
+    let newSelectedStrokeId = state.ui.selectedStrokeId;
+    if (kf && kf.strokes) {
+      if (kf.strokes.length > 0) {
+        const sameStroke = kf.strokes.find(s => s.id === state.ui.selectedStrokeId);
+        newSelectedStrokeId = sameStroke ? sameStroke.id : kf.strokes[0].id;
+      } else {
+        newSelectedStrokeId = null;
+      }
+    }
+
+    const hydratedProps = getHydratedUIProps(
+        state.project, 
+        layerId || state.ui.selectedLayerId, 
+        state.ui.selectedKeyframeId, 
+        newSelectedStrokeId, 
+        keyframeId,
+        kf?.time
+    );
+
+    return {
+      ui: {
+        ...state.ui,
+        selectedLayerTrackId: layerId,
+        selectedTimelineKeyframeId: keyframeId,
+        selectedStrokeId: newSelectedStrokeId,
+        ...(kf ? { timelineCurrentTime: kf.time } : {}),
+        ...hydratedProps
+      }
+    };
+  }),
+
+  captureCurrentPoseToTimelineKeyframe: (layerId: string, keyframeId: string) => set((state) => {
+    const activeKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+    const layerState = activeKf?.layerStates.find(ls => ls.layerId === layerId);
+    if (!layerState) return state;
+
+    const strokes = JSON.parse(JSON.stringify(layerState.strokes || []));
+    const animations = state.project.animations || [];
+    const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId;
+
+    const updatedAnimations = animations.map(anim => {
+      if (anim.id === activeAnimId && anim.tracks) {
+        const tracks = anim.tracks.map(t => {
+          if (t.layerId === layerId) {
+            const keyframes = t.keyframes.map(k => k.id === keyframeId ? { ...k, strokes } : k);
+            return { ...t, keyframes };
+          }
+          return t;
+        });
+        return { ...anim, tracks };
+      }
+      return anim;
+    });
+
+    return { project: { ...state.project, animations: updatedAnimations } };
+  }),
+
+  // ==========================================
+  // STATE MACHINE & INTERACTIVE TRIGGER RULES
+  // ==========================================
+  addInteraction: (layerId: string, trigger: InteractionTrigger, action: InteractionAction, name?: string, collider?: InteractionCollider) => set((state) => {
+    const existing = state.project.interactions || [];
+    const defaultCollider: InteractionCollider = collider || {
+      type: layerId === 'canvas' ? 'canvas' : 'layer'
+    };
+
+    const newInteraction: LayerInteraction = {
+      id: `interaction-${Date.now()}`,
+      layerId,
+      name: name || `On ${trigger}`,
+      trigger,
+      action,
+      collider: defaultCollider,
+      enabled: true
+    };
+
+    return {
+      project: {
+        ...state.project,
+        interactions: [...existing, newInteraction]
+      }
+    };
+  }),
+
+  updateInteraction: (id: string, updates: Partial<LayerInteraction>) => set((state) => {
+    const existing = state.project.interactions || [];
+    const updated = existing.map(i => i.id === id ? { ...i, ...updates } : i);
+    return { project: { ...state.project, interactions: updated } };
+  }),
+
+  deleteInteraction: (id: string) => set((state) => {
+    const existing = state.project.interactions || [];
+    return {
+      project: {
+        ...state.project,
+        interactions: existing.filter(i => i.id !== id)
+      },
+      ui: {
+        ...state.ui,
+        editingColliderInteractionId: state.ui.editingColliderInteractionId === id ? null : state.ui.editingColliderInteractionId
+      }
+    };
+  }),
+
+  setInteractionCollider: (id: string, collider: InteractionCollider) => set((state) => {
+    const existing = state.project.interactions || [];
+    const updated = existing.map(i => i.id === id ? { ...i, collider } : i);
+    return { project: { ...state.project, interactions: updated } };
+  }),
+
+  setEditingColliderInteractionId: (interactionId: string | null) => set((state) => ({
+    ui: { ...state.ui, editingColliderInteractionId: interactionId }
+  }))
 
 }));

@@ -10,7 +10,9 @@ import {
   Layer,
   Keyframe,
   StyleProps,
-  CornerRadii
+  CornerRadii,
+  AnimationTimeline,
+  LayerInteraction
 } from '../types';
 
 import {
@@ -19,8 +21,12 @@ import {
   drawRoundedRectangle,
   drawCornerRoundedPath,
   drawCatmullRomSpline,
-  getSymmetricPoints
+  getSymmetricPoints,
+  isPointInStroke
 } from '../utils/math';
+
+import { evaluateEasing } from '../utils/easing';
+import { evaluateTimelineAxes, advanceTimelineTime } from '../utils/animation';
 
 export const resolveStrokeStyle = (stroke: Stroke | undefined, layer: Layer | undefined): StyleProps => {
   const defaultStyle: StyleProps = {
@@ -61,6 +67,20 @@ export class ProsopopusPlayer {
   // Vertex inertia map for Disney follow-through spring dynamics per layer
   private vertexInertiaMap: Map<string, { current: Point[]; velocity: { x: number; y: number }[] }> = new Map();
   
+  // Timeline & Interactive State Machine Engine
+  public activeAnimationId: string | null = null;
+  public isTimelinePlaying: boolean = false;
+  public timelineTime: number = 0;
+  private timelineDirection: number = 1;
+  private lastHoveredLayerId: string | null = null;
+  private interactiveTransition: {
+    startPos: Record<string, number>;
+    targetPos: Record<string, number>;
+    startTime: number;
+    duration: number;
+    easing: any;
+  } | null = null;
+
   private lastTime: number = 0;
   private animationFrameId: number = 0;
   private isRunning: boolean = false;
@@ -89,6 +109,10 @@ export class ProsopopusPlayer {
     this.targetAxes = { 'axis-x': initX, 'axis-y': initY };
     this.lastPointerPos = { x: initX, y: initY };
 
+    if (project.animations && project.animations.length > 0) {
+      this.activeAnimationId = project.activeAnimationId || project.animations[0].id;
+    }
+
     this.setupInteraction();
   }
 
@@ -100,12 +124,115 @@ export class ProsopopusPlayer {
     if (cursorType === 'crosshair') this.canvas.style.cursor = 'crosshair';
     else if (cursorType === 'none' || cursorType === 'dot') this.canvas.style.cursor = 'none';
     else this.canvas.style.cursor = 'default';
+
+    if (project.animations && project.animations.length > 0) {
+      if (!this.activeAnimationId || !project.animations.some(a => a.id === this.activeAnimationId)) {
+        this.activeAnimationId = project.activeAnimationId || project.animations[0].id;
+      }
+    }
+  }
+
+  public playAnimation(id?: string) {
+    if (id) this.activeAnimationId = id;
+    this.isTimelinePlaying = true;
+  }
+
+  public pauseAnimation() {
+    this.isTimelinePlaying = false;
+  }
+
+  public setTimelineTime(time: number) {
+    this.timelineTime = time;
+  }
+
+  public goToKeyframe(keyframeId: string, duration: number = 350, easing: any = 'easeInOut') {
+    const kf = this.project.keyframes.find(k => k.id === keyframeId);
+    if (!kf) return;
+    this.interactiveTransition = {
+      startPos: { ...this.targetAxes },
+      targetPos: { ...kf.axisValues },
+      startTime: performance.now(),
+      duration: Math.max(1, duration),
+      easing
+    };
+  }
+
+  private findHitLayer(canvasPoint: Point): string | null {
+    const kf = this.project.keyframes[0];
+    if (!kf) return null;
+    for (let l = this.project.layers.length - 1; l >= 0; l--) {
+      const layer = this.project.layers[l];
+      if (!layer.visible) continue;
+      const ls = kf.layerStates.find(s => s.layerId === layer.id);
+      if (!ls) continue;
+      for (const stroke of ls.strokes) {
+        if (isPointInStroke(canvasPoint, stroke.points)) {
+          return layer.id;
+        }
+      }
+    }
+    return null;
+  }
+
+  private triggerInteraction(rule: LayerInteraction) {
+    if (rule.action.type === 'play_animation' && rule.action.targetAnimationId) {
+      this.playAnimation(rule.action.targetAnimationId);
+    } else if (rule.action.type === 'go_to_keyframe' && rule.action.targetKeyframeId) {
+      this.goToKeyframe(rule.action.targetKeyframeId, rule.action.duration, rule.action.easing);
+    }
   }
 
   private setupInteraction() {
+    const getCanvasPoint = (clientX: number, clientY: number): Point => {
+      const rect = this.canvas.getBoundingClientRect();
+      const scaleX = (this.project.canvasSize?.width || 800) / (rect.width || 1);
+      const scaleY = (this.project.canvasSize?.height || 600) / (rect.height || 1);
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    };
+
+    const handleClick = (clientX: number, clientY: number) => {
+      if (!this.project.interactions || this.project.interactions.length === 0) return;
+      const cp = getCanvasPoint(clientX, clientY);
+      const hitLayerId = this.findHitLayer(cp);
+      const matching = this.project.interactions.find(i => 
+        i.trigger === 'click' && (i.layerId === hitLayerId || i.layerId === 'canvas')
+      );
+      if (matching) {
+        this.triggerInteraction(matching);
+      }
+    };
+
     const handleMove = (clientX: number, clientY: number) => {
       const rect = this.canvas.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
+
+      // Check hover enter / leave interactions
+      if (this.project.interactions && this.project.interactions.length > 0) {
+        const cp = getCanvasPoint(clientX, clientY);
+        const hoveredLayerId = this.findHitLayer(cp);
+
+        if (hoveredLayerId !== this.lastHoveredLayerId) {
+          const prevLayer = this.lastHoveredLayerId;
+          this.lastHoveredLayerId = hoveredLayerId;
+
+          if (prevLayer) {
+            const leaveRule = this.project.interactions.find(i => 
+              i.trigger === 'hover_leave' && (i.layerId === prevLayer || i.layerId === 'canvas')
+            );
+            if (leaveRule) this.triggerInteraction(leaveRule);
+          }
+
+          if (hoveredLayerId) {
+            const enterRule = this.project.interactions.find(i => 
+              i.trigger === 'hover_enter' && (i.layerId === hoveredLayerId || i.layerId === 'canvas')
+            );
+            if (enterRule) this.triggerInteraction(enterRule);
+          }
+        }
+      }
 
       const rawNormX = (clientX - rect.left) / rect.width;
       const rawNormY = (clientY - rect.top) / rect.height;
@@ -188,10 +315,14 @@ export class ProsopopusPlayer {
         processedY = Math.max(0, Math.min(1, processedY));
       }
 
-      this.targetAxes['axis-x'] = processedX;
-      this.targetAxes['axis-y'] = processedY;
+      // If no interactive transition is active, mouse sets target axes
+      if (!this.interactiveTransition && !this.isTimelinePlaying) {
+        this.targetAxes['axis-x'] = processedX;
+        this.targetAxes['axis-y'] = processedY;
+      }
     };
 
+    const onPointerDown = (e: PointerEvent) => handleClick(e.clientX, e.clientY);
     const onPointerMove = (e: PointerEvent) => handleMove(e.clientX, e.clientY);
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches && e.touches.length > 0) {
@@ -200,11 +331,13 @@ export class ProsopopusPlayer {
     };
     const onMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
 
+    this.canvas.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove, { passive: true });
     window.addEventListener('touchmove', onTouchMove, { passive: true });
     window.addEventListener('mousemove', onMouseMove, { passive: true });
 
     this.cleanupListeners = () => {
+      this.canvas.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('mousemove', onMouseMove);
@@ -240,6 +373,58 @@ export class ProsopopusPlayer {
     if (!this.lastTime) this.lastTime = time;
     const dt = Math.min((time - this.lastTime) / 1000, 0.1);
     this.lastTime = time;
+
+    // 1. Advance Interactive Transition if active
+    if (this.interactiveTransition) {
+      const trans = this.interactiveTransition;
+      const elapsed = performance.now() - trans.startTime;
+      const progress = Math.min(1, elapsed / Math.max(1, trans.duration));
+      const eased = evaluateEasing(progress, trans.easing || 'easeInOut');
+
+      const nextTarget: Record<string, number> = {};
+      const axesKeys = new Set([...Object.keys(trans.startPos), ...Object.keys(trans.targetPos)]);
+      axesKeys.forEach(k => {
+        const v0 = trans.startPos[k] ?? 0.5;
+        const v1 = trans.targetPos[k] ?? 0.5;
+        nextTarget[k] = v0 + (v1 - v0) * eased;
+      });
+      this.targetAxes = { ...this.targetAxes, ...nextTarget };
+
+      if (progress >= 1) {
+        this.interactiveTransition = null;
+      }
+    }
+    // 2. Advance Timeline Animation if active
+    else if (this.isTimelinePlaying && this.project.animations) {
+      const activeAnim = this.project.animations.find(a => a.id === this.activeAnimationId) || this.project.animations[0];
+      if (activeAnim) {
+        const { newTime, newDirection, isEnded } = advanceTimelineTime(
+          this.timelineTime,
+          activeAnim.duration,
+          dt,
+          activeAnim.loopMode,
+          this.timelineDirection
+        );
+        this.timelineTime = newTime;
+        this.timelineDirection = newDirection;
+
+        const animAxes = evaluateTimelineAxes(activeAnim, newTime);
+        this.targetAxes = { ...this.targetAxes, ...animAxes };
+
+        if (isEnded) {
+          this.isTimelinePlaying = false;
+          // Check animation_end interaction triggers
+          if (this.project.interactions) {
+            const endInteraction = this.project.interactions.find(i =>
+              i.trigger === 'animation_end' && (!i.action.targetAnimationId || i.action.targetAnimationId === activeAnim.id)
+            );
+            if (endInteraction) {
+              this.triggerInteraction(endInteraction);
+            }
+          }
+        }
+      }
+    }
 
     this.updatePhysics(dt);
     this.render(dt);

@@ -4,6 +4,8 @@ import { Canvas } from './components/Canvas';
 import { LayerPanel, SettingsPanel } from './components/Panels';
 import { AxisMap } from './components/AxisMap';
 import { DebugMenu } from './components/DebugMenu';
+import { Timeline } from './components/Timeline';
+import { InteractionsPanel } from './components/InteractionsPanel';
 import { useStore } from './store/useStore';
 
 function App() {
@@ -60,9 +62,17 @@ function App() {
       {/* Panels are always available (via toggle) */}
       <LayerPanel />
       <SettingsPanel />
+
+      {/* Mode Expert Panels */}
+      {isEditMode && ui.expertModeEnabled && (
+        <>
+          <Timeline />
+          <InteractionsPanel />
+        </>
+      )}
       
-      {/* Matrix is strictly for Editing */}
-      {isEditMode && <AxisMap />}
+      {/* Matrix is strictly for Editing, and hidden when Timeline is open */}
+      {isEditMode && (!ui.expertModeEnabled || !ui.isTimelineOpen) && <AxisMap />}
 
       {/* Debug Menu */}
       <DebugMenu />

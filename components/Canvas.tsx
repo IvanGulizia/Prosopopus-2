@@ -3,12 +3,79 @@ import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { interpolateStrokePoints, snapPointToGrid, isPointInStroke, calculateInterpolationWeights, distance, getBoundingBox, rotatePoint, lerp, drawCornerRoundedPath, drawRoundedRectangle, drawCatmullRomSpline, simplifyCollinearPoints, distToSegment, getSymmetricPoints, generateRectanglePoints, generateEllipsePoints, generatePolygonPoints, generateShapePoints, getCornerHandlePositions } from '../utils/math';
 import { resolveStrokeStyle } from '../utils/style';
-import { Point, CornerRadii, ShapeConfig, Stroke } from '../types';
+import { Point, CornerRadii, ShapeConfig, Stroke, AnimationTimeline, TimelineKeyframeMarker, LayerInteraction, Project, UIState } from '../types';
+import { evaluateEasing } from '../utils/easing';
+import { evaluateTimelineAxes, advanceTimelineTime, evaluateLayerTimelineStrokes, testPointInCollider } from '../utils/animation';
 import { APP_COLORS } from '../constants';
 
-type InteractionMode = 'none' | 'drawing' | 'polyline' | 'drawingShape' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex' | 'draggingCorner';
+type InteractionMode = 'none' | 'drawing' | 'polyline' | 'drawingShape' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex' | 'draggingCorner' | 'draggingCollider';
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br';
 type CornerHandle = keyof CornerRadii;
+
+export const isPointInsidePolygon = (p: Point, points: Point[]): boolean => {
+  if (!points || points.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const xi = points[i].x, yi = points[i].y;
+    const xj = points[j].x, yj = points[j].y;
+    const intersect = ((yi > p.y) !== (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+};
+
+export const resolveLayerVisibleStrokes = (proj: Project, u: UIState, layerId: string): Stroke[] => {
+  const layer = proj.layers.find(l => l.id === layerId);
+  if (!layer || !layer.visible) return [];
+
+  if (layer.isGuide) {
+    return (layer.guideStrokes && layer.guideStrokes.length > 0)
+      ? layer.guideStrokes
+      : (proj.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
+  }
+
+  const isTimelineDriving = layer.driverMode === 'timeline' || u.isTimelineOpen;
+  if (isTimelineDriving) {
+    const activeAnim = proj.animations?.find(a => a.id === (u.activeAnimationId || proj.activeAnimationId)) || proj.animations?.[0];
+    const track = activeAnim?.tracks?.find(t => t.layerId === layer.id);
+    if (track && track.keyframes && track.keyframes.length > 0) {
+      if (u.selectedTimelineKeyframeId) {
+        const matchKf = track.keyframes.find(k => k.id === u.selectedTimelineKeyframeId);
+        if (matchKf && matchKf.strokes && matchKf.strokes.length > 0) {
+          return matchKf.strokes;
+        }
+      }
+      const tTime = u.timelineCurrentTime ?? 0;
+      const matchTimeKf = track.keyframes.find(k => Math.abs(k.time - tTime) <= 0.03);
+      if (matchTimeKf && matchTimeKf.strokes && matchTimeKf.strokes.length > 0) {
+        return matchTimeKf.strokes;
+      }
+      return evaluateLayerTimelineStrokes(
+        track,
+        tTime,
+        layer.interpolationMode || 'resample',
+        200,
+        activeAnim?.loopMode || 'loop',
+        activeAnim?.duration || 2.0,
+        layer
+      );
+    }
+  }
+
+  if (u.selectedKeyframeId) {
+    const kf = proj.keyframes.find(k => k.id === u.selectedKeyframeId);
+    const ls = kf?.layerStates.find(s => s.layerId === layer.id);
+    return ls?.strokes || [];
+  }
+
+  return [];
+};
+
+export const resolveActiveVisibleStroke = (proj: Project, u: UIState): Stroke | undefined => {
+  if (!u.selectedStrokeId || !u.selectedLayerId) return undefined;
+  const strokes = resolveLayerVisibleStrokes(proj, u, u.selectedLayerId);
+  return strokes.find(s => s.id === u.selectedStrokeId);
+};
 
 export const Canvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -17,7 +84,8 @@ export const Canvas: React.FC = () => {
   const { 
       ui, project, updateAxisValue, updateMultipleAxisValues, 
       addStrokeToCurrentKeyframe, updateStrokeInCurrentKeyframe, selectStroke, selectLayer,
-      undo, redo, deleteStroke, setTransformMode, setTool, addOrUpdateShapeStroke, setCornerRadii, setCornerRadius
+      undo, redo, deleteStroke, setTransformMode, setTool, addOrUpdateShapeStroke, setCornerRadii, setCornerRadius,
+      setInteractionCollider
   } = useStore();
   
   // -- Stable Refs for Animation Loop --
@@ -36,6 +104,18 @@ export const Canvas: React.FC = () => {
   
   // Play Mode Local Physics State (Decoupled from Store)
   const playModeAxesRef = useRef<Record<string, number>>({ 'axis-x': 0.5, 'axis-y': 0.5 });
+
+  // Timeline & State Machine Physics / Transition Refs
+  const timelinePingPongDirRef = useRef<number>(1);
+  const interactiveTransitionRef = useRef<{
+    startPos: Record<string, number>;
+    targetPos: Record<string, number>;
+    startTime: number;
+    duration: number;
+    easing: any;
+  } | null>(null);
+  const lastHoveredLayerRef = useRef<string | null>(null);
+  const hoveredInteractionsRef = useRef<Set<string>>(new Set());
 
   // Vertex Inertia Dynamics (Disney Follow-Through / Jiggle - Approach B)
   const vertexInertiaRef = useRef<Map<string, { current: Point[], velocity: Point[] }>>(new Map());
@@ -314,16 +394,18 @@ export const Canvas: React.FC = () => {
           }
 
           if (e.key === 'Backspace' || e.key === 'Delete') {
+              if (ui.isTimelineOpen && ui.selectedTimelineKeyframeId) {
+                  // Keyframe deletion in timeline is handled exclusively by Timeline component
+                  return;
+              }
               if (ui.selectedStrokeId) {
                   deleteStroke(ui.selectedStrokeId);
               }
           }
 
-          if (ui.selectedStrokeId && ui.selectedKeyframeId && ui.selectedLayerId && (e.key.startsWith('Arrow'))) {
+          if (ui.selectedStrokeId && ui.selectedLayerId && (e.key.startsWith('Arrow'))) {
               e.preventDefault();
-              const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-              const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-              const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+              const stroke = resolveActiveVisibleStroke(project, ui);
               
               if (stroke) {
                   const step = e.shiftKey ? ui.gridSize : 1;
@@ -342,27 +424,15 @@ export const Canvas: React.FC = () => {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [ui.selectedTool, ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedLayerId, polylinePoints, project.keyframes, isVertexMode]);
+  }, [ui.selectedTool, ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedTimelineKeyframeId, ui.timelineCurrentTime, ui.isTimelineOpen, ui.selectedLayerId, polylinePoints, project, isVertexMode]);
 
   useEffect(() => {
     if ((ui.selectedTool !== 'select' && ui.selectedTool !== 'shape') || !ui.selectedStrokeId || !ui.selectedLayerId) {
         setSelectionBounds(null);
         return;
     }
-    let stroke: Stroke | undefined;
-    if (ui.selectedKeyframeId) {
-        const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-        const layerState = kf?.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
-        stroke = layerState?.strokes.find(s => s.id === ui.selectedStrokeId);
-    }
-    if (!stroke) {
-        for (const kf of project.keyframes) {
-            const layerState = kf.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
-            const s = layerState?.strokes.find(st => st.id === ui.selectedStrokeId);
-            if (s) { stroke = s; break; }
-        }
-    }
-    if (!stroke) {
+    const stroke = resolveActiveVisibleStroke(project, ui);
+    if (!stroke || !stroke.points || stroke.points.length === 0) {
         setSelectionBounds(null);
         return;
     }
@@ -370,7 +440,7 @@ export const Canvas: React.FC = () => {
     setSelectionBounds({
         cx: bbox.centerX, cy: bbox.centerY, width: bbox.width, height: bbox.height, rotation: stroke.shapeConfig?.rotation || 0
     });
-  }, [ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedLayerId, ui.selectedTool, project.keyframes]);
+  }, [ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedTimelineKeyframeId, ui.timelineCurrentTime, ui.isTimelineOpen, ui.selectedLayerId, ui.selectedTool, project]);
 
   const getGizmoHit = (p: Point, bounds: { cx: number, cy: number, width: number, height: number, rotation: number } | null) => {
       if (!bounds) return null;
@@ -412,23 +482,20 @@ export const Canvas: React.FC = () => {
       return -1;
   };
 
-  // Active Layer Selection: Only allow selecting strokes that are on the active layer
+  // Active Layer Selection: Only allow selecting strokes that are visible on the active layer
   const findHitStrokeAcrossLayers = (p: Point): { strokeId: string; layerId: string } | null => {
-     const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-     if (!kf) return null;
-
      const activeLayerId = ui.selectedLayerId;
      if (!activeLayerId) return null;
 
      const layer = project.layers.find(l => l.id === activeLayerId && !l.id.includes('-sym-') && l.visible && !l.locked);
      if (!layer) return null;
 
-     const layerState = kf.layerStates.find(ls => ls.layerId === layer.id);
-     if (!layerState) return null;
-
-     for (let i = layerState.strokes.length - 1; i >= 0; i--) {
-        const s = layerState.strokes[i];
-        if (isPointInStroke(p, s.points)) {
+     const strokes = resolveLayerVisibleStrokes(project, ui, activeLayerId);
+     for (let i = strokes.length - 1; i >= 0; i--) {
+        const s = strokes[i];
+        if (!s.points || s.points.length === 0) continue;
+        const isHit = isPointInStroke(p, s.points) || ((s.closed || s.shapeConfig || (s.style?.fillColor && s.style?.fillColor !== 'none')) && isPointInsidePolygon(p, s.points));
+        if (isHit) {
            return { strokeId: s.id, layerId: layer.id };
         }
      }
@@ -449,15 +516,74 @@ export const Canvas: React.FC = () => {
     const p = getCanvasPoint(e);
     
     if (ui.mode === 'play') {
+       // Interactive State Machine Trigger on Click
+       if (project.interactions && project.interactions.length > 0) {
+          const targetKf = project.keyframes.find(k => k.id === ui.selectedKeyframeId) || project.keyframes[0];
+          const matchingInteraction = project.interactions.find(i => {
+             if (i.trigger !== 'click') return false;
+             const targetStrokes = targetKf?.layerStates.find(ls => ls.layerId === i.layerId)?.strokes || [];
+             return testPointInCollider(p, i.collider, targetStrokes);
+          });
+
+          if (matchingInteraction) {
+             if (matchingInteraction.action.type === 'play_animation' && matchingInteraction.action.targetAnimationId) {
+                useStore.getState().setActiveAnimation(matchingInteraction.action.targetAnimationId);
+                useStore.getState().setTimelinePlaying(true);
+             } else if (matchingInteraction.action.type === 'go_to_keyframe' && matchingInteraction.action.targetKeyframeId) {
+                const targetKfObj = project.keyframes.find(k => k.id === matchingInteraction.action.targetKeyframeId);
+                if (targetKfObj) {
+                   interactiveTransitionRef.current = {
+                      startPos: { ...targetAxesRef.current },
+                      targetPos: { ...targetKfObj.axisValues },
+                      startTime: performance.now(),
+                      duration: matchingInteraction.action.duration || 350,
+                      easing: matchingInteraction.action.easing || 'easeInOut'
+                   };
+                }
+             }
+          }
+       }
        return;
+    }
+
+    // Check if dragging Collider in Edit Mode
+    if (ui.editingColliderInteractionId && ui.mode === 'edit') {
+       const activeInteraction = project.interactions?.find(i => i.id === ui.editingColliderInteractionId);
+       if (activeInteraction && activeInteraction.collider) {
+          const col = activeInteraction.collider;
+          let isHit = false;
+          if (col.type === 'rect') {
+             const rx = col.rect?.x ?? col.x ?? 0;
+             const ry = col.rect?.y ?? col.y ?? 0;
+             const rw = col.rect?.width ?? col.width ?? 100;
+             const rh = col.rect?.height ?? col.height ?? 100;
+             isHit = p.x >= rx && p.x <= rx + rw && p.y >= ry && p.y <= ry + rh;
+          } else if (col.type === 'circle') {
+             const cx = col.circle?.x ?? col.x ?? 0;
+             const cy = col.circle?.y ?? col.y ?? 0;
+             const cr = col.circle?.radius ?? col.radius ?? 50;
+             isHit = distance(p, { x: cx, y: cy }) <= cr;
+          }
+          if (isHit) {
+             setInteractionMode('draggingCollider');
+             setTransformStart({
+                mouse: p,
+                center: { x: col.x ?? 0, y: col.y ?? 0 },
+                angle: 0,
+                width: col.width ?? 100,
+                height: col.height ?? 100,
+                points: []
+             });
+             (e.target as Element).setPointerCapture(e.pointerId);
+             return;
+          }
+       }
     }
 
     if (ui.selectedTool === 'select' || ui.selectedTool === 'shape') {
         // First check corner handles ONLY if a rectangle shape is selected and not in vertex mode
         if (!isVertexMode && ui.selectedStrokeId && selectionBounds) {
-            const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-            const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-            const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+            const stroke = resolveActiveVisibleStroke(project, ui);
             const isRectangleShape = stroke?.shapeConfig?.type === 'rectangle';
             
             if (isRectangleShape) {
@@ -481,9 +607,7 @@ export const Canvas: React.FC = () => {
         }
 
         if (isVertexMode && ui.selectedStrokeId && ui.selectedTool === 'select') {
-             const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-             const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-             const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+             const stroke = resolveActiveVisibleStroke(project, ui);
              
              if (stroke) {
                  const vertexIndex = getVertexHit(p, stroke.points);
@@ -546,9 +670,7 @@ export const Canvas: React.FC = () => {
         if (!isVertexMode && ui.selectedStrokeId && selectionBounds) {
             const hitGizmo = getGizmoHit(p, selectionBounds);
             if (hitGizmo) {
-                const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-                const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-                const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+                const stroke = resolveActiveVisibleStroke(project, ui);
                 if (stroke) {
                     setTransformStart({
                         mouse: p, center: { x: selectionBounds.cx, y: selectionBounds.cy },
@@ -572,9 +694,6 @@ export const Canvas: React.FC = () => {
              selectStroke(hit.strokeId); 
              return;
         } else {
-             if (isVertexMode) {
-                 return;
-             }
              if (ui.selectedTool === 'shape') {
                  // Start drawing a new shape on click-drag
                  const snappedP = getSnappedPoint(p);
@@ -584,8 +703,10 @@ export const Canvas: React.FC = () => {
                  (e.target as Element).setPointerCapture(e.pointerId);
                  return;
              }
+             // Clicked on empty canvas: deselect cleanly and exit vertex editing mode
              selectStroke(null);
              setTransformMode('object'); 
+             return;
         }
         return;
     }
@@ -608,7 +729,98 @@ export const Canvas: React.FC = () => {
     const p = getCanvasPoint(e);
     setMousePos(getSnappedPoint(p));
 
-    if (ui.mode === 'play') return;
+    if (ui.mode === 'play') {
+       // Interactive State Machine Trigger on Hover (Enter / Leave) with Collider support
+       if (project.interactions && project.interactions.length > 0) {
+          const targetKf = project.keyframes.find(k => k.id === ui.selectedKeyframeId) || project.keyframes[0];
+          const currentHovered = new Set<string>();
+
+          project.interactions.forEach(i => {
+             const targetStrokes = targetKf?.layerStates.find(ls => ls.layerId === i.layerId)?.strokes || [];
+             if (testPointInCollider(p, i.collider, targetStrokes)) {
+                currentHovered.add(i.id);
+             }
+          });
+
+          // Check newly entered interactions
+          currentHovered.forEach(intId => {
+             if (!hoveredInteractionsRef.current.has(intId)) {
+                const enterRule = project.interactions.find(i => i.id === intId && i.trigger === 'hover_enter');
+                if (enterRule) {
+                   if (enterRule.action.type === 'play_animation' && enterRule.action.targetAnimationId) {
+                      useStore.getState().setActiveAnimation(enterRule.action.targetAnimationId);
+                      useStore.getState().setTimelinePlaying(true);
+                   } else if (enterRule.action.type === 'go_to_keyframe' && enterRule.action.targetKeyframeId) {
+                      const targetKfObj = project.keyframes.find(k => k.id === enterRule.action.targetKeyframeId);
+                      if (targetKfObj) {
+                         interactiveTransitionRef.current = {
+                            startPos: { ...targetAxesRef.current },
+                            targetPos: { ...targetKfObj.axisValues },
+                            startTime: performance.now(),
+                            duration: enterRule.action.duration || 350,
+                            easing: enterRule.action.easing || 'easeInOut'
+                         };
+                      }
+                   }
+                }
+             }
+          });
+
+          // Check left interactions
+          hoveredInteractionsRef.current.forEach(intId => {
+             if (!currentHovered.has(intId)) {
+                const leaveRule = project.interactions.find(i => i.id === intId && i.trigger === 'hover_leave');
+                if (leaveRule) {
+                   if (leaveRule.action.type === 'play_animation' && leaveRule.action.targetAnimationId) {
+                      useStore.getState().setActiveAnimation(leaveRule.action.targetAnimationId);
+                      useStore.getState().setTimelinePlaying(true);
+                   } else if (leaveRule.action.type === 'go_to_keyframe' && leaveRule.action.targetKeyframeId) {
+                      const targetKfObj = project.keyframes.find(k => k.id === leaveRule.action.targetKeyframeId);
+                      if (targetKfObj) {
+                         interactiveTransitionRef.current = {
+                            startPos: { ...targetAxesRef.current },
+                            targetPos: { ...targetKfObj.axisValues },
+                            startTime: performance.now(),
+                            duration: leaveRule.action.duration || 350,
+                            easing: leaveRule.action.easing || 'easeInOut'
+                         };
+                      }
+                   }
+                }
+             }
+          });
+
+          hoveredInteractionsRef.current = currentHovered;
+       }
+       return;
+    }
+
+    if (interactionModeRef.current === 'draggingCollider' && transformStart && ui.editingColliderInteractionId) {
+       const activeInteraction = project.interactions?.find(i => i.id === ui.editingColliderInteractionId);
+       if (activeInteraction && activeInteraction.collider) {
+          const col = activeInteraction.collider;
+          const dx = p.x - transformStart.mouse.x;
+          const dy = p.y - transformStart.mouse.y;
+          if (col.type === 'rect') {
+             const origX = transformStart.center.x;
+             const origY = transformStart.center.y;
+             setInteractionCollider(activeInteraction.id, {
+                ...col,
+                x: Math.round(origX + dx),
+                y: Math.round(origY + dy)
+             });
+          } else if (col.type === 'circle') {
+             const origX = transformStart.center.x;
+             const origY = transformStart.center.y;
+             setInteractionCollider(activeInteraction.id, {
+                ...col,
+                x: Math.round(origX + dx),
+                y: Math.round(origY + dy)
+             });
+          }
+       }
+       return;
+    }
 
     if (interactionModeRef.current === 'drawingShape' && shapeDragStart) {
         let currentP = p;
@@ -677,18 +889,8 @@ export const Canvas: React.FC = () => {
         }
 
         // Real-time update of the shape points in the active keyframe if stroke is a shape
-        if (ui.selectedStrokeId && ui.selectedKeyframeId) {
-            let stroke: Stroke | undefined;
-            const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-            const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-            stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
-            if (!stroke) {
-                for (const otherKf of project.keyframes) {
-                    const otherLs = otherKf.layerStates.find(s => s.layerId === ui.selectedLayerId);
-                    const s = otherLs?.strokes.find(st => st.id === ui.selectedStrokeId);
-                    if (s) { stroke = s; break; }
-                }
-            }
+        if (ui.selectedStrokeId) {
+            const stroke = resolveActiveVisibleStroke(project, ui);
             if (stroke) {
                 const currentRadii = stroke.shapeConfig?.cornerRadii || ui.cornerRadii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
                 const newRadii = e.altKey 
@@ -908,20 +1110,8 @@ export const Canvas: React.FC = () => {
             return { x: rx + transformStart.center.x + dX, y: ry + transformStart.center.y + dY, pressure: pt.pressure };
         });
 
-        // Find existing stroke across keyframes if available
-        let stroke: Stroke | undefined;
-        if (ui.selectedKeyframeId) {
-            const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-            const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-            stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
-        }
-        if (!stroke) {
-            for (const kf of project.keyframes) {
-                const ls = kf.layerStates.find(s => s.layerId === ui.selectedLayerId);
-                const s = ls?.strokes.find(st => st.id === ui.selectedStrokeId);
-                if (s) { stroke = s; break; }
-            }
-        }
+        // Find existing stroke in active keyframe / state
+        const stroke = resolveActiveVisibleStroke(project, ui);
 
         let updatedShapeConfig: ShapeConfig | undefined = undefined;
         if (stroke?.shapeConfig) {
@@ -982,6 +1172,75 @@ export const Canvas: React.FC = () => {
           canvas.width = CANVAS_WIDTH * dpr;
           canvas.height = CANVAS_HEIGHT * dpr;
           ctx.scale(dpr, dpr);
+      }
+
+      // --- TIMELINE & INTERACTIVE STATE MACHINE CALCULATION ---
+      const activeAnim = currentProject.animations?.find(a => a.id === (currentUI.activeAnimationId || currentProject.activeAnimationId));
+      
+      // 1. Interactive Transition (e.g. click trigger transition to a keyframe)
+      if (interactiveTransitionRef.current) {
+        const trans = interactiveTransitionRef.current;
+        const elapsed = performance.now() - trans.startTime;
+        const progress = Math.min(1, elapsed / Math.max(1, trans.duration));
+        const eased = evaluateEasing(progress, trans.easing || 'easeInOut');
+        
+        const nextTarget: Record<string, number> = {};
+        const axesKeys = new Set([...Object.keys(trans.startPos), ...Object.keys(trans.targetPos)]);
+        axesKeys.forEach(k => {
+          const v0 = trans.startPos[k] ?? 0.5;
+          const v1 = trans.targetPos[k] ?? 0.5;
+          nextTarget[k] = v0 + (v1 - v0) * eased;
+        });
+        targetAxesRef.current = { ...targetAxesRef.current, ...nextTarget };
+
+        if (progress >= 1) {
+          interactiveTransitionRef.current = null;
+        }
+      } 
+      // 2. Timeline Playback Driver
+      else if (currentUI.timelinePlaying && activeAnim) {
+        const { newTime, newDirection, isEnded } = advanceTimelineTime(
+          currentUI.timelineCurrentTime,
+          activeAnim.duration,
+          dt,
+          activeAnim.loopMode,
+          timelinePingPongDirRef.current
+        );
+        timelinePingPongDirRef.current = newDirection;
+        
+        // Update target axes from timeline markers - DISABLED so Matrix layers remain fully independent
+        // const animAxes = evaluateTimelineAxes(activeAnim, newTime);
+        // targetAxesRef.current = { ...targetAxesRef.current, ...animAxes };
+
+        // Sync timeline playhead smoothly
+        useStore.getState().setTimelineCurrentTime(newTime);
+
+        if (isEnded) {
+          useStore.getState().setTimelinePlaying(false);
+          // Check for 'animation_end' interactions
+          if (currentProject.interactions) {
+            const endInteraction = currentProject.interactions.find(i => 
+              i.trigger === 'animation_end' && (!i.action.targetAnimationId || i.action.targetAnimationId === activeAnim.id)
+            );
+            if (endInteraction) {
+              if (endInteraction.action.type === 'play_animation' && endInteraction.action.targetAnimationId) {
+                useStore.getState().setActiveAnimation(endInteraction.action.targetAnimationId);
+                useStore.getState().setTimelinePlaying(true);
+              } else if (endInteraction.action.type === 'go_to_keyframe' && endInteraction.action.targetKeyframeId) {
+                const targetKf = currentProject.keyframes.find(k => k.id === endInteraction.action.targetKeyframeId);
+                if (targetKf) {
+                  interactiveTransitionRef.current = {
+                    startPos: { ...targetAxesRef.current },
+                    targetPos: { ...targetKf.axisValues },
+                    startTime: performance.now(),
+                    duration: endInteraction.action.duration || 350,
+                    easing: endInteraction.action.easing || 'easeInOut'
+                  };
+                }
+              }
+            }
+          }
+        }
       }
 
       // --- AXIS & PHYSICS CALCULATION ---
@@ -1131,96 +1390,156 @@ export const Canvas: React.FC = () => {
       if (currentUI.onionSkinEnabled && currentUI.mode === 'edit') {
          const onionMode = currentUI.onionSkinMode || 'both';
 
-         currentProject.keyframes.forEach(kf => {
-           if (kf.id === currentUI.selectedKeyframeId) return; 
-           
-           kf.layerStates.forEach(ls => {
-              const targetLayer = currentProject.layers.find(l => l.id === ls.layerId);
-              if (!targetLayer || !targetLayer.visible) return;
+         if (currentUI.isTimelineOpen) {
+           // TIMELINE ONION SKINNING: Show previous keyframe pose (cyan) and next keyframe pose (orange)
+           const activeAnim = currentProject.animations?.find(a => a.id === currentUI.activeAnimationId) || currentProject.animations?.[0];
+           const currentTime = currentUI.timelineCurrentTime ?? 0;
 
-              const isLayerActive = targetLayer.id === currentUI.selectedLayerId;
-              if (!isLayerActive && currentUI.inactiveLayerMode === 'hidden') return;
+           currentProject.layers.forEach(layer => {
+             if (!layer.visible) return;
+             const isLayerActive = layer.id === currentUI.selectedLayerId;
+             if (!isLayerActive && currentUI.inactiveLayerMode === 'hidden') return;
 
-              const inactiveMultiplier = isLayerActive ? 1.0 : (currentUI.inactiveLayerOpacity ?? 0.35);
-              const stroke = ls.strokes[0];
-              if (stroke && stroke.points.length > 1) {
-                const isSpline = targetLayer?.interpolationMode === 'spline';
-                const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
-                const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
+             const track = activeAnim?.tracks?.find(t => t.layerId === layer.id);
+             if (!track || !track.keyframes || track.keyframes.length < 2) return;
 
-                const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (
-                  (targetLayer?.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
-                    enabled: true,
-                    type: currentUI.symmetryType,
-                    axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
-                    axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
-                    radialCount: currentUI.symmetryRadialCount || 4
-                  } : null
-                );
+             const sorted = [...track.keyframes].sort((a, b) => a.time - b.time);
+             const prevKf = sorted.filter(k => k.time < currentTime - 0.02).pop();
+             const nextKf = sorted.find(k => k.time > currentTime + 0.02);
 
-                const onionPaths = [stroke.points];
-                if (layerSym && layerSym.enabled) {
-                  const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
-                  const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
-                  onionPaths.push(...getSymmetricPoints(stroke.points, layerSym.type, ax, ay, layerSym.radialCount || 4));
-                }
+             const posesToRender = [
+               { kf: prevKf, color: '#06B6D4', label: 'Précédent' },
+               { kf: nextKf, color: '#F97316', label: 'Suivant' }
+             ].filter(p => p.kf && p.kf.strokes && p.kf.strokes.length > 0);
 
-                onionPaths.forEach(pts => {
-                  if (pts.length === 0) return;
-                  
-                  const strokeRadii = stroke.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
-                  const isQuadShape = pts.length === 4 || pts.length === 5;
+             posesToRender.forEach(({ kf, color }) => {
+               if (!kf || !kf.strokes) return;
+               kf.strokes.forEach(s => {
+                 if (!s.points || s.points.length === 0) return;
+                 const isSpline = layer.interpolationMode === 'spline';
+                 const resolvedStyle = resolveStrokeStyle(s, layer);
+                 const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
+                 const strokeRadii = s.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                 const isQuadShape = s.points.length === 4 || s.points.length === 5;
 
-                  const renderPath = () => {
-                    if (isSpline) {
-                      drawCatmullRomSpline(ctx, pts, 0.5);
-                    } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
-                      drawRoundedRectangle(ctx, pts, strokeRadii, cornerRoundness);
-                    } else {
-                      ctx.beginPath();
-                      if (cornerRoundness > 0) {
-                        drawCornerRoundedPath(ctx, pts, cornerRoundness);
-                      } else {
-                        ctx.moveTo(pts[0].x, pts[0].y);
-                        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-                      }
-                    }
-                  };
+                 ctx.save();
+                 ctx.globalAlpha = Math.min(0.8, (currentUI.onionSkinOpacity ?? 0.35) * (layer.opacity ?? 1));
 
-                  // 1. Translucent Styled representation
-                  if (onionMode === 'styled' || onionMode === 'both') {
-                    ctx.save();
-                    ctx.globalAlpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1) * inactiveMultiplier;
-                    renderPath();
-                    if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
-                      ctx.fillStyle = resolvedStyle.fillColor;
-                      ctx.fill();
-                    }
-                    if (resolvedStyle.strokeColor && resolvedStyle.strokeColor !== 'none') {
-                      ctx.lineCap = currentUI.strokeCap || 'round';
-                      ctx.lineJoin = 'round';
-                      ctx.strokeStyle = resolvedStyle.strokeColor;
-                      ctx.lineWidth = resolvedStyle.strokeWidth;
-                      ctx.stroke();
-                    }
-                    ctx.restore();
-                  }
+                 if (isSpline) {
+                   drawCatmullRomSpline(ctx, s.points, 0.5);
+                 } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
+                   drawRoundedRectangle(ctx, s.points, strokeRadii, cornerRoundness);
+                 } else {
+                   ctx.beginPath();
+                   if (cornerRoundness > 0) {
+                     drawCornerRoundedPath(ctx, s.points, cornerRoundness);
+                   } else {
+                     ctx.moveTo(s.points[0].x, s.points[0].y);
+                     for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+                   }
+                 }
 
-                  // 2. Wireframe Thin line
-                  if (onionMode === 'wireframe' || onionMode === 'both') {
-                    ctx.save();
-                    ctx.globalAlpha = Math.min(1.0, (currentUI.onionSkinOpacity * 2.5 + 0.2) * inactiveMultiplier);
-                    renderPath();
-                    ctx.strokeStyle = isLayerActive ? '#3B82F6' : '#64748B';
-                    ctx.lineWidth = 1;
-                    ctx.setLineDash([]);
-                    ctx.stroke();
-                    ctx.restore();
-                  }
-                });
-              }
+                 ctx.strokeStyle = color;
+                 ctx.lineWidth = Math.max(1.5, (resolvedStyle.strokeWidth || 2) * 0.8);
+                 ctx.setLineDash([4, 4]);
+                 ctx.stroke();
+                 ctx.restore();
+               });
+             });
            });
-         });
+         } else {
+           // MATRIX ONION SKINNING
+           currentProject.keyframes.forEach(kf => {
+            if (kf.id === currentUI.selectedKeyframeId) return; 
+            
+            kf.layerStates.forEach(ls => {
+               const targetLayer = currentProject.layers.find(l => l.id === ls.layerId);
+               if (!targetLayer || !targetLayer.visible) return;
+
+               const isLayerActive = targetLayer.id === currentUI.selectedLayerId;
+               if (!isLayerActive && currentUI.inactiveLayerMode === 'hidden') return;
+
+               const inactiveMultiplier = isLayerActive ? 1.0 : (currentUI.inactiveLayerOpacity ?? 0.35);
+               const stroke = ls.strokes[0];
+               if (stroke && stroke.points.length > 1) {
+                 const isSpline = targetLayer?.interpolationMode === 'spline';
+                 const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
+                 const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
+
+                 const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (
+                   (targetLayer?.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
+                     enabled: true,
+                     type: currentUI.symmetryType,
+                     axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
+                     axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
+                     radialCount: currentUI.symmetryRadialCount || 4
+                   } : null
+                 );
+
+                 const onionPaths = [stroke.points];
+                 if (layerSym && layerSym.enabled) {
+                   const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
+                   const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
+                   onionPaths.push(...getSymmetricPoints(stroke.points, layerSym.type, ax, ay, layerSym.radialCount || 4));
+                 }
+
+                 onionPaths.forEach(pts => {
+                   if (pts.length === 0) return;
+                   
+                   const strokeRadii = stroke.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                   const isQuadShape = pts.length === 4 || pts.length === 5;
+
+                   const renderPath = () => {
+                     if (isSpline) {
+                       drawCatmullRomSpline(ctx, pts, 0.5);
+                     } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
+                       drawRoundedRectangle(ctx, pts, strokeRadii, cornerRoundness);
+                     } else {
+                       ctx.beginPath();
+                       if (cornerRoundness > 0) {
+                         drawCornerRoundedPath(ctx, pts, cornerRoundness);
+                       } else {
+                         ctx.moveTo(pts[0].x, pts[0].y);
+                         for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                       }
+                     }
+                   };
+
+                   // 1. Translucent Styled representation
+                   if (onionMode === 'styled' || onionMode === 'both') {
+                     ctx.save();
+                     ctx.globalAlpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1) * inactiveMultiplier;
+                     renderPath();
+                     if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
+                       ctx.fillStyle = resolvedStyle.fillColor;
+                       ctx.fill();
+                     }
+                     if (resolvedStyle.strokeColor && resolvedStyle.strokeColor !== 'none') {
+                       ctx.lineCap = currentUI.strokeCap || 'round';
+                       ctx.lineJoin = 'round';
+                       ctx.strokeStyle = resolvedStyle.strokeColor;
+                       ctx.lineWidth = resolvedStyle.strokeWidth;
+                       ctx.stroke();
+                     }
+                     ctx.restore();
+                   }
+
+                   // 2. Wireframe Thin line
+                   if (onionMode === 'wireframe' || onionMode === 'both') {
+                     ctx.save();
+                     ctx.globalAlpha = Math.min(1.0, (currentUI.onionSkinOpacity * 2.5 + 0.2) * inactiveMultiplier);
+                     renderPath();
+                     ctx.strokeStyle = isLayerActive ? '#3B82F6' : '#64748B';
+                     ctx.lineWidth = 1;
+                     ctx.setLineDash([]);
+                     ctx.stroke();
+                     ctx.restore();
+                   }
+                 });
+               }
+            });
+          });
+         }
       }
 
       currentProject.layers.forEach(layer => {
@@ -1272,7 +1591,7 @@ export const Canvas: React.FC = () => {
             let sColor = resolvedStyle.strokeColor;
             let sWidth = isInactiveWireframe ? 1 : resolvedStyle.strokeWidth;
             const rRoundness = resolvedStyle.cornerRoundness ?? 0;
-            const rRadii = resolvedStyle.cornerRadii;
+            const rRadii = s.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
             const isRectangleShape = s.shapeConfig?.type === 'rectangle';
 
             if (layer.interpolationMode === 'spline') {
@@ -1315,6 +1634,80 @@ export const Canvas: React.FC = () => {
           ctx.globalAlpha = 1.0;
           ctx.globalCompositeOperation = 'source-over';
           return;
+        }
+
+        // Timeline Driver Mode: evaluate layer temporally from its timeline track ONLY if driverMode === 'timeline'
+        const isTimelineDriving = layer.driverMode === 'timeline' && currentUI.expertModeEnabled;
+        if (isTimelineDriving) {
+          const activeAnim = currentProject.animations?.find(a => a.id === currentUI.activeAnimationId) || currentProject.animations?.[0];
+          const track = activeAnim?.tracks?.find(t => t.layerId === layer.id);
+          
+          if (track && track.keyframes && track.keyframes.length > 0) {
+            const tTime = currentUI.timelineCurrentTime ?? 0;
+            const evalStrokes = evaluateLayerTimelineStrokes(
+              track,
+              tTime,
+              layer.interpolationMode || 'linear',
+              interpolationTargetCount,
+              activeAnim?.loopMode || 'loop',
+              activeAnim?.duration || 2.0,
+              layer // Add the missing layer argument here
+            );
+
+            if (evalStrokes && evalStrokes.length > 0) {
+              evalStrokes.forEach(s => {
+                if (!s.points || s.points.length === 0) return;
+                const resolvedStyle = resolveStrokeStyle(s, layer);
+                let sFill = isInactiveWireframe ? 'none' : resolvedStyle.fillColor;
+                let sColor = resolvedStyle.strokeColor;
+                let sWidth = isInactiveWireframe ? 1 : resolvedStyle.strokeWidth;
+                const rRoundness = resolvedStyle.cornerRoundness ?? 0;
+                const rRadii = s.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                const isRectangleShape = s.shapeConfig?.type === 'rectangle';
+
+                if (layer.interpolationMode === 'spline') {
+                  drawCatmullRomSpline(ctx, s.points, 0.5);
+                } else if (isRectangleShape && (rRadii || rRoundness > 0)) {
+                  drawRoundedRectangle(ctx, s.points, rRadii, rRoundness);
+                } else {
+                  ctx.beginPath();
+                  if (rRoundness > 0) {
+                    drawCornerRoundedPath(ctx, s.points, rRoundness);
+                  } else {
+                    ctx.moveTo(s.points[0].x, s.points[0].y);
+                    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+                  }
+                  if (s.closed) ctx.closePath();
+                }
+
+                ctx.globalAlpha = layerGlobalAlpha;
+                switch(layer.blendMode) {
+                  case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+                  case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+                  case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+                  case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+                  case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+                  default: ctx.globalCompositeOperation = 'source-over';
+                }
+
+                if (sFill && sFill !== 'none') {
+                  ctx.fillStyle = sFill;
+                  ctx.fill();
+                }
+                if (sColor && sColor !== 'none') {
+                  ctx.lineCap = currentUI.strokeCap || 'round';
+                  ctx.lineJoin = 'round';
+                  ctx.strokeStyle = sColor;
+                  ctx.lineWidth = sWidth;
+                  ctx.stroke();
+                }
+              });
+
+              ctx.globalAlpha = 1.0;
+              ctx.globalCompositeOperation = 'source-over';
+              return;
+            }
+          }
         }
 
         const layerRelevantKeyframes = currentProject.keyframes.filter(kf => {
@@ -1365,7 +1758,8 @@ export const Canvas: React.FC = () => {
                 color: resolvedStyle.strokeColor, 
                 fillColor: resolvedStyle.fillColor, 
                 width: resolvedStyle.strokeWidth,
-                cornerRoundness: resolvedStyle.cornerRoundness ?? 0
+                cornerRoundness: resolvedStyle.cornerRoundness ?? 0,
+                cornerRadii: s?.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii
             };
         });
 
@@ -1700,9 +2094,7 @@ export const Canvas: React.FC = () => {
             ctx.fill();
 
             // Render Figma-like inner Corner Handles ONLY for Rectangle shapes
-            const activeKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
-            const activeLayerState = activeKf?.layerStates.find(ls => ls.layerId === currentUI.selectedLayerId);
-            const activeStroke = activeLayerState?.strokes.find(s => s.id === currentUI.selectedStrokeId);
+            const activeStroke = resolveActiveVisibleStroke(currentProject, currentUI);
             const isRectangleShape = activeStroke?.shapeConfig?.type === 'rectangle';
 
             if (isRectangleShape) {
@@ -1731,29 +2123,75 @@ export const Canvas: React.FC = () => {
           }
 
           if (isVertexModeActive) {
-            const activeKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
-            if (activeKf) {
-                const activeLayerState = activeKf.layerStates.find(ls => ls.layerId === currentUI.selectedLayerId);
-                const activeStroke = activeLayerState?.strokes.find(s => s.id === currentUI.selectedStrokeId);
+            const activeStroke = resolveActiveVisibleStroke(currentProject, currentUI);
+            if (activeStroke) {
+                const VERTEX_RADIUS = 3;
+                const ACTIVE_VERTEX_RADIUS = 5;
                 
-                if (activeStroke) {
-                    const VERTEX_RADIUS = 3;
-                    const ACTIVE_VERTEX_RADIUS = 5;
-                    
-                    ctx.strokeStyle = '#3B82F6';
-                    ctx.fillStyle = '#FFFFFF';
-                    
-                    activeStroke.points.forEach((p, idx) => {
-                        const isActive = idx === activeVertIdx;
-                        ctx.beginPath();
-                        ctx.arc(p.x, p.y, isActive ? ACTIVE_VERTEX_RADIUS : VERTEX_RADIUS, 0, Math.PI * 2);
-                        ctx.fillStyle = isActive ? '#3B82F6' : '#FFFFFF';
-                        ctx.fill();
-                        ctx.stroke();
-                    });
-                }
+                ctx.strokeStyle = '#3B82F6';
+                ctx.fillStyle = '#FFFFFF';
+                
+                activeStroke.points.forEach((p, idx) => {
+                    const isActive = idx === activeVertIdx;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, isActive ? ACTIVE_VERTEX_RADIUS : VERTEX_RADIUS, 0, Math.PI * 2);
+                    ctx.fillStyle = isActive ? '#3B82F6' : '#FFFFFF';
+                    ctx.fill();
+                    ctx.stroke();
+                });
             }
           }
+      }
+
+      // Render Visual Collider Box / Circle in Edit Mode when editing an interaction or viewing Interactions Panel
+      if (currentUI.mode === 'edit' && currentUI.isInteractionsOpen && currentProject.interactions) {
+        currentProject.interactions.forEach(interaction => {
+          if (!interaction.collider) return;
+          const col = interaction.collider;
+          const isSelected = currentUI.editingColliderInteractionId === interaction.id;
+          
+          // Draw rect or circle if custom collider
+          if (col.type === 'rect') {
+            const rx = col.rect?.x ?? col.x ?? 0;
+            const ry = col.rect?.y ?? col.y ?? 0;
+            const rw = col.rect?.width ?? col.width ?? 100;
+            const rh = col.rect?.height ?? col.height ?? 100;
+
+            ctx.save();
+            ctx.strokeStyle = isSelected ? '#3B82F6' : 'rgba(59, 130, 246, 0.4)';
+            ctx.lineWidth = isSelected ? 2 : 1;
+            ctx.setLineDash(isSelected ? [5, 4] : [3, 3]);
+            ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.04)';
+            ctx.fillRect(rx, ry, rw, rh);
+            ctx.strokeRect(rx, ry, rw, rh);
+
+            // Label
+            ctx.fillStyle = isSelected ? '#2563EB' : 'rgba(37, 99, 235, 0.6)';
+            ctx.font = 'bold 10px monospace';
+            ctx.fillText(`[Collider: ${interaction.name || 'Zone'}]`, rx + 4, Math.max(12, ry - 4));
+            ctx.restore();
+          } else if (col.type === 'circle') {
+            const cx = col.circle?.x ?? col.x ?? 0;
+            const cy = col.circle?.y ?? col.y ?? 0;
+            const cr = col.circle?.radius ?? col.radius ?? 50;
+
+            ctx.save();
+            ctx.strokeStyle = isSelected ? '#3B82F6' : 'rgba(59, 130, 246, 0.4)';
+            ctx.lineWidth = isSelected ? 2 : 1;
+            ctx.setLineDash(isSelected ? [5, 4] : [3, 3]);
+            ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.04)';
+            ctx.beginPath();
+            ctx.arc(cx, cy, cr, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            // Label
+            ctx.fillStyle = isSelected ? '#2563EB' : 'rgba(37, 99, 235, 0.6)';
+            ctx.font = 'bold 10px monospace';
+            ctx.fillText(`[Collider: ${interaction.name || 'Zone'}]`, cx - cr, Math.max(12, cy - cr - 4));
+            ctx.restore();
+          }
+        });
       }
 
       // Render custom dot/shape cursor if configured and in play mode
@@ -1829,9 +2267,7 @@ export const Canvas: React.FC = () => {
                 }
                 const p = getCanvasPoint(e as any);
                 if (ui.selectedTool === 'select' && isVertexMode && ui.selectedStrokeId) {
-                    const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-                    const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-                    const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+                    const stroke = resolveActiveVisibleStroke(project, ui);
                     if (stroke && getVertexHit(p, stroke.points) !== -1) {
                         return;
                     }
@@ -1844,9 +2280,7 @@ export const Canvas: React.FC = () => {
           {ui.selectedStrokeId && ui.mode === 'edit' && ui.transformMode === 'points' && (
               <div className="absolute bottom-4 right-4 bg-black/40 backdrop-blur-sm text-white text-[10px] font-mono px-2 py-1 rounded-md pointer-events-none opacity-60">
                   {(() => {
-                      const kf = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
-                      const ls = kf?.layerStates.find(s => s.layerId === ui.selectedLayerId);
-                      const stroke = ls?.strokes.find(s => s.id === ui.selectedStrokeId);
+                      const stroke = resolveActiveVisibleStroke(project, ui);
                       return stroke ? `${stroke.points.length} pts` : '';
                   })()}
               </div>

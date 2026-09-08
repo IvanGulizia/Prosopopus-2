@@ -55,6 +55,39 @@ export const DEFAULT_KEYFRAME: Keyframe = {
   ]
 };
 
+export const DEFAULT_ANIMATION = {
+  id: 'anim-default',
+  name: 'Loop 1',
+  duration: 2.0,
+  loopMode: 'loop' as const,
+  fps: 30,
+  markers: [
+    {
+      id: 'marker-1',
+      time: 0.0,
+      keyframeId: 'kf-origin',
+      axisValues: { 'axis-x': 0.5, 'axis-y': 0.5 },
+      easing: 'easeInOut' as const,
+      name: 'Origin'
+    },
+    {
+      id: 'marker-2',
+      time: 1.0,
+      axisValues: { 'axis-x': 0.9, 'axis-y': 0.5 },
+      easing: 'easeInOut' as const,
+      name: 'Pose 1'
+    },
+    {
+      id: 'marker-3',
+      time: 2.0,
+      keyframeId: 'kf-origin',
+      axisValues: { 'axis-x': 0.5, 'axis-y': 0.5 },
+      easing: 'easeInOut' as const,
+      name: 'Origin'
+    }
+  ]
+};
+
 export const DEFAULT_PROJECT: Project = {
   id: 'project-default',
   name: 'Puppet Project',
@@ -65,6 +98,9 @@ export const DEFAULT_PROJECT: Project = {
   axes: DEFAULT_AXES,
   layers: [DEFAULT_LAYER],
   keyframes: [DEFAULT_KEYFRAME],
+  animations: [DEFAULT_ANIMATION],
+  interactions: [],
+  activeAnimationId: 'anim-default',
 };
 
 export const INITIAL_THEME: Theme = {
@@ -95,6 +131,19 @@ export const INITIAL_UI_STATE: UIState = {
   isExporting: false,
   exportFileName: 'my-project',
   isDebugMenuOpen: false,
+
+  // Mode Expert & Timelines
+  expertModeEnabled: true,
+  isTimelineOpen: false, // Starts closed (showing Matrix), can be opened via Toolbar or switched
+  autoKeyframeEnabled: true, // Default ON: drawing auto-creates/updates keyframe at timeline playhead
+  isInteractionsOpen: false,
+  activeAnimationId: 'anim-default',
+  timelinePlaying: false,
+  timelineCurrentTime: 0.0,
+  selectedMarkerId: 'marker-1',
+  selectedLayerTrackId: null,
+  selectedTimelineKeyframeId: null,
+  editingColliderInteractionId: null,
 
   theme: INITIAL_THEME,
   

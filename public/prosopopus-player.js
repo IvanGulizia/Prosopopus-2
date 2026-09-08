@@ -536,6 +536,118 @@ const getSymmetricPoints = (points, type, axisX, axisY, radialCount = 4) => {
   return results;
 };
 
+// --- EASING & ANIMATION UTILS ---
+
+const evaluateEasing = (t, type = 'easeInOut') => {
+  const clampT = Math.max(0, Math.min(1, t));
+  switch (type) {
+    case 'linear':
+      return clampT;
+    case 'easeIn':
+      return clampT * clampT * clampT;
+    case 'easeOut':
+      return 1 - Math.pow(1 - clampT, 3);
+    case 'easeInOut':
+      return clampT < 0.5 ? 4 * clampT * clampT * clampT : 1 - Math.pow(-2 * clampT + 2, 3) / 2;
+    case 'spring': {
+      const c4 = (2 * Math.PI) / 3;
+      return clampT === 0 ? 0 : clampT === 1 ? 1 : Math.pow(2, -10 * clampT) * Math.sin((clampT * 10 - 0.75) * c4) + 1;
+    }
+    case 'bounce': {
+      const n1 = 7.5625;
+      const d1 = 2.75;
+      let x = clampT;
+      if (x < 1 / d1) return n1 * x * x;
+      if (x < 2 / d1) return n1 * (x -= 1.5 / d1) * x + 0.75;
+      if (x < 2.5 / d1) return n1 * (x -= 2.25 / d1) * x + 0.9375;
+      return n1 * (x -= 2.625 / d1) * x + 0.984375;
+    }
+    default:
+      return clampT;
+  }
+};
+
+const evaluateTimelineAxes = (animation, time) => {
+  const { markers, duration } = animation;
+  if (!markers || markers.length === 0) return { 'axis-x': 0.5, 'axis-y': 0.5 };
+  if (markers.length === 1) return { ...markers[0].axisValues };
+
+  const t = Math.max(0, Math.min(duration, time));
+  let prevMarker = markers[0];
+  let nextMarker = markers[markers.length - 1];
+
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i].time <= t) prevMarker = markers[i];
+  }
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i].time >= t) { nextMarker = markers[i]; break; }
+  }
+
+  if (prevMarker.id === nextMarker.id || prevMarker.time === nextMarker.time) {
+    return { ...prevMarker.axisValues };
+  }
+
+  const segmentDuration = Math.max(0.0001, nextMarker.time - prevMarker.time);
+  const rawProgress = Math.max(0, Math.min(1, (t - prevMarker.time) / segmentDuration));
+  const easedProgress = evaluateEasing(rawProgress, prevMarker.easing || 'easeInOut');
+
+  const result = {};
+  const allAxes = new Set([
+    ...Object.keys(prevMarker.axisValues || {}),
+    ...Object.keys(nextMarker.axisValues || {})
+  ]);
+
+  allAxes.forEach(axisKey => {
+    const v0 = prevMarker.axisValues[axisKey] ?? 0.5;
+    const v1 = nextMarker.axisValues[axisKey] ?? 0.5;
+    result[axisKey] = v0 + (v1 - v0) * easedProgress;
+  });
+
+  return result;
+};
+
+const advanceTimelineTime = (currentTime, duration, dt, loopMode = 'loop', direction = 1) => {
+  let newDirection = direction;
+  let isEnded = false;
+  let newTime = currentTime + dt * newDirection;
+
+  if (loopMode === 'once') {
+    if (newTime >= duration) {
+      newTime = duration;
+      isEnded = true;
+    } else if (newTime <= 0) {
+      newTime = 0;
+    }
+  } else if (loopMode === 'loop') {
+    if (newTime >= duration) newTime = newTime % duration;
+    else if (newTime < 0) newTime = duration - (Math.abs(newTime) % duration);
+  } else if (loopMode === 'pingpong') {
+    if (newTime >= duration) {
+      newTime = duration;
+      newDirection = -1;
+    } else if (newTime <= 0) {
+      newTime = 0;
+      newDirection = 1;
+    }
+  }
+
+  return { newTime, newDirection, isEnded };
+};
+
+const isPointInStroke = (p, points, threshold = 12) => {
+  if (!points || points.length < 2) return false;
+  for (let i = 0; i < points.length - 1; i++) {
+    const v = points[i];
+    const w = points[i + 1];
+    const l2 = Math.pow(distance(v, w), 2);
+    let t = l2 === 0 ? 0 : ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    const proj = { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) };
+    if (distance(p, proj) < threshold) return true;
+  }
+  return false;
+};
+
 // --- PLAYER CLASS ---
 
 export class ProsopopusPlayer {
@@ -563,6 +675,14 @@ export class ProsopopusPlayer {
     this.lastPointerPos = { x: initX, y: initY };
     this.lastPointerTime = 0;
 
+    // Timeline & Interaction Engine
+    this.activeAnimationId = (project.animations && project.animations.length > 0) ? (project.activeAnimationId || project.animations[0].id) : null;
+    this.isTimelinePlaying = false;
+    this.timelineTime = 0;
+    this.timelineDirection = 1;
+    this.lastHoveredLayerId = null;
+    this.interactiveTransition = null;
+
     this.vertexInertiaMap = new Map();
     this.lastTime = 0;
     this.animationFrameId = 0;
@@ -580,12 +700,113 @@ export class ProsopopusPlayer {
     if (cursorType === 'crosshair') this.canvas.style.cursor = 'crosshair';
     else if (cursorType === 'none' || cursorType === 'dot') this.canvas.style.cursor = 'none';
     else this.canvas.style.cursor = 'default';
+
+    if (project.animations && project.animations.length > 0) {
+      if (!this.activeAnimationId || !project.animations.some(a => a.id === this.activeAnimationId)) {
+        this.activeAnimationId = project.activeAnimationId || project.animations[0].id;
+      }
+    }
+  }
+
+  playAnimation(id) {
+    if (id) this.activeAnimationId = id;
+    this.isTimelinePlaying = true;
+  }
+
+  pauseAnimation() {
+    this.isTimelinePlaying = false;
+  }
+
+  setTimelineTime(time) {
+    this.timelineTime = time;
+  }
+
+  goToKeyframe(keyframeId, duration = 350, easing = 'easeInOut') {
+    const kf = this.project.keyframes.find(k => k.id === keyframeId);
+    if (!kf) return;
+    this.interactiveTransition = {
+      startPos: { ...this.targetAxes },
+      targetPos: { ...kf.axisValues },
+      startTime: performance.now(),
+      duration: Math.max(1, duration),
+      easing
+    };
+  }
+
+  findHitLayer(canvasPoint) {
+    const kf = this.project.keyframes[0];
+    if (!kf) return null;
+    for (let l = this.project.layers.length - 1; l >= 0; l--) {
+      const layer = this.project.layers[l];
+      if (!layer.visible) continue;
+      const ls = kf.layerStates.find(s => s.layerId === layer.id);
+      if (!ls) continue;
+      for (const stroke of ls.strokes) {
+        if (isPointInStroke(canvasPoint, stroke.points)) {
+          return layer.id;
+        }
+      }
+    }
+    return null;
+  }
+
+  triggerInteraction(rule) {
+    if (rule.action.type === 'play_animation' && rule.action.targetAnimationId) {
+      this.playAnimation(rule.action.targetAnimationId);
+    } else if (rule.action.type === 'go_to_keyframe' && rule.action.targetKeyframeId) {
+      this.goToKeyframe(rule.action.targetKeyframeId, rule.action.duration, rule.action.easing);
+    }
   }
 
   setupInteraction() {
+    const getCanvasPoint = (clientX, clientY) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const scaleX = (this.project.canvasSize?.width || 800) / (rect.width || 1);
+      const scaleY = (this.project.canvasSize?.height || 600) / (rect.height || 1);
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    };
+
+    const handleClick = (clientX, clientY) => {
+      if (!this.project.interactions || this.project.interactions.length === 0) return;
+      const cp = getCanvasPoint(clientX, clientY);
+      const hitLayerId = this.findHitLayer(cp);
+      const matching = this.project.interactions.find(i =>
+        i.trigger === 'click' && (i.layerId === hitLayerId || i.layerId === 'canvas')
+      );
+      if (matching) this.triggerInteraction(matching);
+    };
+
     const handleMove = (clientX, clientY) => {
       const rect = this.canvas.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
+
+      // Check hover interactions
+      if (this.project.interactions && this.project.interactions.length > 0) {
+        const cp = getCanvasPoint(clientX, clientY);
+        const hoveredLayerId = this.findHitLayer(cp);
+
+        if (hoveredLayerId !== this.lastHoveredLayerId) {
+          const prevLayer = this.lastHoveredLayerId;
+          this.lastHoveredLayerId = hoveredLayerId;
+
+          if (prevLayer) {
+            const leaveRule = this.project.interactions.find(i =>
+              i.trigger === 'hover_leave' && (i.layerId === prevLayer || i.layerId === 'canvas')
+            );
+            if (leaveRule) this.triggerInteraction(leaveRule);
+          }
+
+          if (hoveredLayerId) {
+            const enterRule = this.project.interactions.find(i =>
+              i.trigger === 'hover_enter' && (i.layerId === hoveredLayerId || i.layerId === 'canvas')
+            );
+            if (enterRule) this.triggerInteraction(enterRule);
+          }
+        }
+      }
 
       const rawNormX = (clientX - rect.left) / rect.width;
       const rawNormY = (clientY - rect.top) / rect.height;
@@ -615,21 +836,11 @@ export class ProsopopusPlayer {
 
       if (settings.overshootRubberbandEnabled) {
         const factor = settings.overshootRubberbandFactor ?? 0.35;
-        if (processedX < minX) {
-          const overflow = minX - processedX;
-          processedX = minX - (overflow * factor);
-        } else if (processedX > maxX) {
-          const overflow = processedX - maxX;
-          processedX = maxX + (overflow * factor);
-        }
+        if (processedX < minX) processedX = minX - ((minX - processedX) * factor);
+        else if (processedX > maxX) processedX = maxX + ((processedX - maxX) * factor);
 
-        if (processedY < minY) {
-          const overflow = minY - processedY;
-          processedY = minY - (overflow * factor);
-        } else if (processedY > maxY) {
-          const overflow = processedY - maxY;
-          processedY = maxY + (overflow * factor);
-        }
+        if (processedY < minY) processedY = minY - ((minY - processedY) * factor);
+        else if (processedY > maxY) processedY = maxY + ((processedY - maxY) * factor);
 
         processedX = Math.max(0, Math.min(1, processedX));
         processedY = Math.max(0, Math.min(1, processedY));
@@ -662,10 +873,13 @@ export class ProsopopusPlayer {
         processedY = Math.max(0, Math.min(1, processedY));
       }
 
-      this.targetAxes['axis-x'] = processedX;
-      this.targetAxes['axis-y'] = processedY;
+      if (!this.interactiveTransition && !this.isTimelinePlaying) {
+        this.targetAxes['axis-x'] = processedX;
+        this.targetAxes['axis-y'] = processedY;
+      }
     };
 
+    const onPointerDown = (e) => handleClick(e.clientX, e.clientY);
     const onPointerMove = (e) => handleMove(e.clientX, e.clientY);
     const onTouchMove = (e) => {
       if (e.touches && e.touches.length > 0) {
@@ -674,11 +888,13 @@ export class ProsopopusPlayer {
     };
     const onMouseMove = (e) => handleMove(e.clientX, e.clientY);
 
+    this.canvas.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove, { passive: true });
     window.addEventListener('touchmove', onTouchMove, { passive: true });
     window.addEventListener('mousemove', onMouseMove, { passive: true });
 
     this.cleanupListeners = () => {
+      this.canvas.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('mousemove', onMouseMove);
@@ -714,6 +930,55 @@ export class ProsopopusPlayer {
     if (!this.lastTime) this.lastTime = time;
     const dt = Math.min((time - this.lastTime) / 1000, 0.1);
     this.lastTime = time;
+
+    // 1. Advance Interactive Transition
+    if (this.interactiveTransition) {
+      const trans = this.interactiveTransition;
+      const elapsed = performance.now() - trans.startTime;
+      const progress = Math.min(1, elapsed / Math.max(1, trans.duration));
+      const eased = evaluateEasing(progress, trans.easing || 'easeInOut');
+
+      const nextTarget = {};
+      const axesKeys = new Set([...Object.keys(trans.startPos), ...Object.keys(trans.targetPos)]);
+      axesKeys.forEach(k => {
+        const v0 = trans.startPos[k] ?? 0.5;
+        const v1 = trans.targetPos[k] ?? 0.5;
+        nextTarget[k] = v0 + (v1 - v0) * eased;
+      });
+      this.targetAxes = { ...this.targetAxes, ...nextTarget };
+
+      if (progress >= 1) {
+        this.interactiveTransition = null;
+      }
+    }
+    // 2. Advance Timeline Animation
+    else if (this.isTimelinePlaying && this.project.animations) {
+      const activeAnim = this.project.animations.find(a => a.id === this.activeAnimationId) || this.project.animations[0];
+      if (activeAnim) {
+        const { newTime, newDirection, isEnded } = advanceTimelineTime(
+          this.timelineTime,
+          activeAnim.duration,
+          dt,
+          activeAnim.loopMode,
+          this.timelineDirection
+        );
+        this.timelineTime = newTime;
+        this.timelineDirection = newDirection;
+
+        const animAxes = evaluateTimelineAxes(activeAnim, newTime);
+        this.targetAxes = { ...this.targetAxes, ...animAxes };
+
+        if (isEnded) {
+          this.isTimelinePlaying = false;
+          if (this.project.interactions) {
+            const endInteraction = this.project.interactions.find(i =>
+              i.trigger === 'animation_end' && (!i.action.targetAnimationId || i.action.targetAnimationId === activeAnim.id)
+            );
+            if (endInteraction) this.triggerInteraction(endInteraction);
+          }
+        }
+      }
+    }
 
     this.updatePhysics(dt);
     this.render(dt);

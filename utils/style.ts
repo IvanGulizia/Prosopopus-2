@@ -18,7 +18,8 @@ export function resolveStrokeStyle(stroke: Stroke | undefined, layer: Layer | un
       strokeWidth: baseStyle.strokeWidth,
       fillColor: baseStyle.fillColor,
       lineStyle: baseStyle.lineStyle,
-      cornerRoundness: baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness
+      cornerRoundness: baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness,
+      cornerRadii: baseStyle.cornerRadii
     };
   }
 
@@ -27,6 +28,7 @@ export function resolveStrokeStyle(stroke: Stroke | undefined, layer: Layer | un
     strokeWidth: stroke.style.strokeWidth ?? baseStyle.strokeWidth,
     fillColor: stroke.style.fillColor ?? baseStyle.fillColor,
     lineStyle: stroke.style.lineStyle ?? baseStyle.lineStyle,
-    cornerRoundness: stroke.style.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness
+    cornerRoundness: stroke.style.cornerRoundness ?? stroke.shapeConfig?.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness,
+    cornerRadii: stroke.style.cornerRadii ?? stroke.shapeConfig?.cornerRadii ?? baseStyle.cornerRadii
   };
 }

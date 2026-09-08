@@ -33,6 +33,7 @@ export interface ShapeConfig {
   width: number;
   height: number;
   rotation?: number;
+  cornerRoundness?: number;
   cornerRadii?: CornerRadii;
   sides?: number; // For polygon/star
 }
@@ -59,6 +60,7 @@ export interface Stroke {
 // --- Layers ---
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference' | 'exclusion';
 export type InterpolationMode = 'resample' | 'points' | 'spline' | 'length';
+export type LayerDriverMode = 'matrix' | 'timeline';
 
 export interface LayerSymmetryConfig {
   enabled: boolean;
@@ -76,6 +78,7 @@ export interface Layer {
   blendMode: BlendMode;
   opacity: number;
   interpolationMode: InterpolationMode; // Per-layer setting
+  driverMode?: LayerDriverMode; // 'matrix' (default, controlled by spatial axes) or 'timeline' (temporal keyframes)
   baseStyle?: StyleProps; // The default style for strokes in this layer
   symmetry?: LayerSymmetryConfig;
   isGuide?: boolean; // Calque Repère: freehand multi-stroke drawing without state interpolation
@@ -108,6 +111,95 @@ export interface Keyframe {
   layerStates: LayerState[]; 
 }
 
+// --- Timelines & Animation Engine (Mode Expert) ---
+export type EasingType = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'cubicBezier' | 'bounce' | 'spring';
+export type LoopMode = 'once' | 'loop' | 'pingpong';
+
+// Per-Layer Timeline Keyframe (Temporal vector snapshot for this layer)
+export interface LayerTimelineKeyframe {
+  id: string;
+  time: number; // in seconds, e.g. 0.0, 0.5, 1.2
+  strokes: Stroke[]; // Vector snapshot of the layer at this specific time
+  easing?: EasingType; // Transition curve towards the next keyframe
+  name?: string;
+}
+
+// Track for a specific layer in the Timeline
+export interface LayerTimelineTrack {
+  layerId: string;
+  keyframes: LayerTimelineKeyframe[];
+  visible?: boolean;
+  locked?: boolean;
+}
+
+export interface TimelineKeyframeMarker {
+  id: string;
+  time: number; // in seconds, e.g. 0.0, 1.25...
+  keyframeId?: string; // Optional link to a Matrix Keyframe
+  axisValues: Record<string, number>; // Position in matrix axis space e.g. { "axis-x": 0.5, "axis-y": 0.5 }
+  easing: EasingType; // Transition easing to next marker
+  name?: string;
+}
+
+export interface AnimationTimeline {
+  id: string;
+  name: string;
+  duration: number; // Duration in seconds (e.g. 2.0s)
+  loopMode: LoopMode;
+  fps?: number;
+  markers?: TimelineKeyframeMarker[]; // Matrix-level pose markers
+  tracks?: LayerTimelineTrack[]; // Multi-layer temporal tracks
+}
+
+// --- State Machine & Interactive Trigger Rules (Figma-style) ---
+export type InteractionTrigger = 'click' | 'hover_enter' | 'hover_leave' | 'animation_end';
+export type InteractionActionType = 'play_animation' | 'go_to_keyframe' | 'interpolate_to';
+
+export interface ColliderRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ColliderCircle {
+  x: number;
+  y: number;
+  radius: number;
+}
+
+export type InteractionColliderType = 'layer' | 'rect' | 'circle' | 'canvas';
+
+export interface InteractionCollider {
+  type: InteractionColliderType;
+  rect?: ColliderRect;
+  circle?: ColliderCircle;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  radius?: number;
+}
+
+export interface InteractionAction {
+  type: InteractionActionType;
+  targetAnimationId?: string;
+  targetKeyframeId?: string;
+  targetAxisValues?: Record<string, number>;
+  duration?: number; // Transition duration in milliseconds (default: 300ms)
+  easing?: EasingType;
+}
+
+export interface LayerInteraction {
+  id: string;
+  layerId: string; // Layer ID, 'canvas' for canvas-wide events, or 'collider'
+  name?: string;
+  trigger: InteractionTrigger;
+  action: InteractionAction;
+  collider?: InteractionCollider; // Custom hitbox definition
+  enabled?: boolean;
+}
+
 // --- Project Structure ---
 export interface Project {
   id: string;
@@ -119,6 +211,9 @@ export interface Project {
   axes: Axis[];
   layers: Layer[];
   keyframes: Keyframe[];
+  animations?: AnimationTimeline[]; // Stored animation timelines
+  interactions?: LayerInteraction[]; // Stored interactive state triggers
+  activeAnimationId?: string | null; // Default or active timeline
   settings?: Partial<UIState>; // Store relevant UI settings
 }
 
@@ -164,6 +259,19 @@ export interface UIState {
   isExporting: boolean;
   exportFileName: string;
   isDebugMenuOpen: boolean;
+  
+  // Mode Expert & Timeline Panels
+  expertModeEnabled: boolean; // Master toggle for Expert Mode
+  isTimelineOpen: boolean;    // Bottom timeline panel visibility
+  autoKeyframeEnabled: boolean; // Auto-keyframing when drawing on timeline
+  isInteractionsOpen: boolean;// Right interactions & state machine panel visibility
+  activeAnimationId: string | null; // Selected animation timeline ID
+  timelinePlaying: boolean;   // Whether timeline is currently running in edit/preview
+  timelineCurrentTime: number;// Current playhead in seconds
+  selectedMarkerId: string | null; // Selected marker on the timeline track
+  selectedLayerTrackId: string | null; // Selected layer track in Timeline
+  selectedTimelineKeyframeId: string | null; // Selected temporal keyframe on a layer track
+  editingColliderInteractionId: string | null; // Interaction ID currently being edited via canvas collider box
   
   // Theme
   theme: Theme;

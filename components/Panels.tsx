@@ -6,7 +6,7 @@ import { BlendMode, InterpolationMode, Theme, PlayModeCursorType, PlayModeCursor
 import { PALETTE_COLORS } from '../constants';
 
 export const LayerPanel: React.FC = () => {
-  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, toggleLayerSymmetry, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
+  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, setLayerDriverMode, toggleLayerSymmetry, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
   const layers = project.layers.filter(l => !l.id.includes('-sym-'));
   const { theme } = ui;
 
@@ -210,6 +210,22 @@ export const LayerPanel: React.FC = () => {
                    </button>
                  )}
 
+                 {/* Driver Mode Toggle (Matrix vs Timeline) */}
+                 <button 
+                    onClick={(e) => { 
+                       e.stopPropagation(); 
+                       setLayerDriverMode(layer.id, (layer.driverMode === 'timeline' ? 'matrix' : 'timeline')); 
+                    }}
+                    className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
+                        layer.driverMode === 'timeline' 
+                        ? 'text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100' 
+                        : 'text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100'
+                    }`}
+                    title={layer.driverMode === 'timeline' ? 'Mode Driver: Timeline temporelle' : 'Mode Driver: Matrice 2D spatiale'}
+                 >
+                    {layer.driverMode === 'timeline' ? 'TIME' : 'MTX'}
+                 </button>
+
                  {/* Interpolation Mode Toggle */}
                  <button 
                     onClick={(e) => { 
@@ -335,12 +351,13 @@ export const SettingsPanel: React.FC = () => {
       updateCanvasSize, renameProject, setStrokeResolution,
       setStrokeSmoothingFactor,
       toggleSymmetry, setSymmetryType, setSymmetryAxisX, setSymmetryAxisY,
-      setSymmetryRadialCount, setSymmetryTarget, toggleShowSymmetryAxis, resetSymmetryToCenter
+      setSymmetryRadialCount, setSymmetryTarget, toggleShowSymmetryAxis, resetSymmetryToCenter,
+      toggleExpertMode, toggleTimelinePanel, toggleInteractionsPanel
   } = useStore();
   
   const { theme, isSettingsOpen } = ui;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [openSections, setOpenSections] = useState<string[]>(['cursor', 'layer-styles']);
+  const [openSections, setOpenSections] = useState<string[]>(['expert-mode', 'cursor', 'layer-styles']);
   const [applyToAllStates, setApplyToAllStates] = useState(false);
   const [embedJsonUrl, setEmbedJsonUrl] = useState('');
 
@@ -357,6 +374,8 @@ export const SettingsPanel: React.FC = () => {
   if (!isSettingsOpen) return null;
 
   const currentLayer = project.layers.find(l => l.id === ui.selectedLayerId);
+  const currentStrokeColor = ui.brushColor ?? currentLayer?.baseStyle?.strokeColor ?? 'none';
+  const currentFillColor = ui.fillColor ?? currentLayer?.baseStyle?.fillColor ?? 'none';
   const currentKeyframe = project.keyframes.find(k => k.id === ui.selectedKeyframeId);
   const layerState = currentKeyframe?.layerStates.find(ls => ls.layerId === ui.selectedLayerId);
   const currentStroke = ui.selectedStrokeId ? layerState?.strokes.find(s => s.id === ui.selectedStrokeId) : undefined;
@@ -484,6 +503,54 @@ export const SettingsPanel: React.FC = () => {
 
       <div className="p-6 pb-12 space-y-4 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
         
+        {/* SECTION: EXPERT MODE (TIMELINE & STATE MACHINE) */}
+        <SettingsSection 
+            title="Mode Expert (Timeline & State Machine)" 
+            isOpen={openSections.includes('expert-mode')}
+            onToggle={() => toggleSection('expert-mode')}
+            theme={theme}
+        >
+             <div className="space-y-3">
+                 <SettingsToggle 
+                     label="Activer le Mode Expert" 
+                     active={ui.expertModeEnabled} 
+                     onClick={toggleExpertMode} 
+                 />
+                 <p className="text-[11px] text-gray-500 leading-relaxed">
+                     Active la Timeline d'animation temporelle (keyframes, boucles, pingpong, courbes d'interpolation) et le State Machine interactif (déclencheurs au clic/hover sur calques ou canevas).
+                 </p>
+
+                 {ui.expertModeEnabled && (
+                     <div className="pt-2 border-t border-gray-100 space-y-2">
+                         <div className="flex gap-2">
+                             <button
+                                 onClick={toggleTimelinePanel}
+                                 className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all ${
+                                     ui.isTimelineOpen 
+                                         ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                                         : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                 }`}
+                             >
+                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                 {ui.isTimelineOpen ? 'Fermer Timeline' : 'Ouvrir Timeline'}
+                             </button>
+                             <button
+                                 onClick={toggleInteractionsPanel}
+                                 className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all ${
+                                     ui.isInteractionsOpen 
+                                         ? 'bg-purple-600 text-white border-purple-600 shadow-sm' 
+                                         : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                 }`}
+                             >
+                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                 {ui.isInteractionsOpen ? 'Fermer Interactions' : 'Interactions'}
+                             </button>
+                         </div>
+                     </div>
+                 )}
+             </div>
+        </SettingsSection>
+
         {/* SECTION: LAYER GLOBAL STYLES */}
         <SettingsSection 
             title="Layer Global Styles" 
@@ -503,7 +570,7 @@ export const SettingsPanel: React.FC = () => {
                                      style={{ 
                                        backgroundColor: c === 'none' ? '#FFFFFF' : c,
                                        borderColor: theme.border,
-                                       boxShadow: (currentLayer?.baseStyle?.strokeColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
+                                       boxShadow: currentStrokeColor === c ? `0 0 0 2px ${theme.accent}` : 'none'
                                      }}
                                  >
                                    {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
@@ -516,13 +583,13 @@ export const SettingsPanel: React.FC = () => {
                              style={{ 
                                  background: 'conic-gradient(from 0deg, red, yellow, lime, cyan, blue, magenta, red)',
                                  borderColor: theme.border,
-                                 boxShadow: !PALETTE_COLORS.includes(currentLayer?.baseStyle?.strokeColor || '') && (currentLayer?.baseStyle?.strokeColor || 'none') !== 'none' ? `0 0 0 2px ${theme.accent}` : 'none'
+                                 boxShadow: !PALETTE_COLORS.includes(currentStrokeColor) && currentStrokeColor !== 'none' ? `0 0 0 2px ${theme.accent}` : 'none'
                              }}
                              title="Custom precise color"
                          >
                              <input 
                                  type="color" 
-                                 value={currentLayer?.baseStyle?.strokeColor && currentLayer.baseStyle.strokeColor !== 'none' ? currentLayer.baseStyle.strokeColor : '#3B82F6'}
+                                 value={currentStrokeColor !== 'none' ? currentStrokeColor : '#3B82F6'}
                                  onChange={(e) => ui.selectedLayerId && updateLayerStrokeColor(ui.selectedLayerId, e.target.value)}
                                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                              />
@@ -540,7 +607,7 @@ export const SettingsPanel: React.FC = () => {
                                      style={{ 
                                        backgroundColor: c === 'none' ? '#FFFFFF' : c,
                                        borderColor: theme.border,
-                                       boxShadow: (currentLayer?.baseStyle?.fillColor || 'none') === c ? `0 0 0 2px ${theme.accent}` : 'none'
+                                       boxShadow: currentFillColor === c ? `0 0 0 2px ${theme.accent}` : 'none'
                                      }}
                                  >
                                    {c === 'none' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-red-500 rotate-45 transform"></div></div>}
@@ -553,13 +620,13 @@ export const SettingsPanel: React.FC = () => {
                              style={{ 
                                  background: 'conic-gradient(from 0deg, red, yellow, lime, cyan, blue, magenta, red)',
                                  borderColor: theme.border,
-                                 boxShadow: !PALETTE_COLORS.includes(currentLayer?.baseStyle?.fillColor || '') && (currentLayer?.baseStyle?.fillColor || 'none') !== 'none' ? `0 0 0 2px ${theme.accent}` : 'none'
+                                 boxShadow: !PALETTE_COLORS.includes(currentFillColor) && currentFillColor !== 'none' ? `0 0 0 2px ${theme.accent}` : 'none'
                              }}
                              title="Custom precise color"
                          >
                              <input 
                                  type="color" 
-                                 value={currentLayer?.baseStyle?.fillColor && currentLayer.baseStyle.fillColor !== 'none' ? currentLayer.baseStyle.fillColor : '#3B82F6'}
+                                 value={currentFillColor !== 'none' ? currentFillColor : '#3B82F6'}
                                  onChange={(e) => ui.selectedLayerId && updateLayerFillColor(ui.selectedLayerId, e.target.value)}
                                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                              />
