@@ -16,11 +16,12 @@
    - In-between easing curve indicators with interactive popover (`easeInOut`, `easeOut`, `easeIn`, `linear`, `spring`, `bounce`).
    - Seamless loop interpolation back into the first keyframe.
    - Loop modes: `loop`, `pingpong`, `once`.
-3. **Interactive State Machine**:
-   - Element-level trigger assignment (Figma-style intuitive interaction builder).
-   - Triggers: `click`, `hover_enter`, `hover_leave`, `animation_end`.
-   - Target scope: specific layer (with precise hit testing) or entire canvas.
-   - Actions: `go_to_keyframe` with custom easing/duration, `play_animation`.
+3. **Interactive State Machine & Nodal Graph (Rive & Unity Animator Inspired)**:
+   - Floating, draggable and resizable graph window (`StateMachineGraph.tsx`) with pan & zoom and bezier SVG connection cables.
+   - Nodes: **Pose** (single keyframe state with direct morphing) and **Clip** (full timeline sequence).
+   - Rich trigger suite: `click`, `double_click`, `pointer_down`, `pointer_up`, `hover_enter`, `hover_leave`, `scroll_down`, `scroll_up`, `scroll_scrub`, `key_press`, `delay`, `animation_end`.
+   - Continuous scroll scrubbing: drive clips or pose morphs dynamically with the mouse wheel or touchpad.
+   - Live Inspector panel for node and transition attributes (duration, easing curve, event parameters).
 4. **Settings & Toggles**:
    - Dedicated "Mode Expert" section in Settings panel.
    - URL parameter support: `?mode=expert`.

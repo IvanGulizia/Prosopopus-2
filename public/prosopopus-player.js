@@ -1156,7 +1156,7 @@ export class ProsopopusPlayer {
         const stiffness = (settings.overshootVertexInertiaFactor ?? 0.6) * 120.0;
         const damping = (settings.overshootVertexDamping ?? 0.75) * 35.0;
         const mass = Math.max(0.1, settings.overshootVertexMass ?? 1.0);
-        const inertiaKey = `layer-${layer.id}`;
+        const inertiaKey = `layer-${layer.id}-stroke-${strokeId}`;
         let stored = this.vertexInertiaMap.get(inertiaKey);
 
         if (!stored || stored.current.length !== interpolatedPoints.length) {

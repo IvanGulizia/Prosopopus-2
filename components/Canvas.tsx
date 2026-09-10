@@ -6,6 +6,7 @@ import { resolveStrokeStyle } from '../utils/style';
 import { Point, CornerRadii, ShapeConfig, Stroke, AnimationTimeline, TimelineKeyframeMarker, LayerInteraction, Project, UIState } from '../types';
 import { evaluateEasing } from '../utils/easing';
 import { evaluateTimelineAxes, advanceTimelineTime, evaluateLayerTimelineStrokes, testPointInCollider } from '../utils/animation';
+import { checkTransitionMatches, interpolateStrokesDirect } from '../utils/stateMachine';
 import { APP_COLORS } from '../constants';
 
 type InteractionMode = 'none' | 'drawing' | 'polyline' | 'drawingShape' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex' | 'draggingCorner' | 'draggingCollider';
@@ -113,6 +114,17 @@ export const Canvas: React.FC = () => {
     startTime: number;
     duration: number;
     easing: any;
+  } | null>(null);
+  const stateMachineTransitionRef = useRef<{
+    fromNodeId: string;
+    toNodeId: string;
+    startTime: number;
+    duration: number;
+    easing: any;
+    fromStrokesMap: Record<string, Stroke[]>;
+    toStrokesMap: Record<string, Stroke[]>;
+    targetClipAnimationId?: string;
+    targetLayerId?: string;
   } | null>(null);
   const lastHoveredLayerRef = useRef<string | null>(null);
   const hoveredInteractionsRef = useRef<Set<string>>(new Set());
@@ -329,9 +341,46 @@ export const Canvas: React.FC = () => {
         targetAxesRef.current = { 'axis-x': processedX, 'axis-y': processedY };
     };
 
+    const handleWindowWheel = (e: WheelEvent) => {
+        const delta = e.deltaY > 0 ? 0.04 : -0.04;
+        const currentProg = useStore.getState().ui.runtimeScrollProgress ?? 0;
+        const nextProg = Math.max(0, Math.min(1, currentProg + delta));
+        useStore.getState().setRuntimeScrollProgress(nextProg);
+
+        triggerStateMachineEvent({
+            type: 'wheel',
+            scrollDelta: e.deltaY,
+            scrollProgress: nextProg
+        });
+        if (e.deltaY > 0) {
+            triggerStateMachineEvent({ type: 'scroll_down', scrollProgress: nextProg });
+        } else {
+            triggerStateMachineEvent({ type: 'scroll_up', scrollProgress: nextProg });
+        }
+    };
+
+    const handleWindowKeyDown = (e: KeyboardEvent) => {
+        const activeTag = document.activeElement?.tagName.toLowerCase() || '';
+        const isInput = ['input', 'textarea', 'select'].includes(activeTag) || (document.activeElement as HTMLElement)?.isContentEditable;
+        if (isInput) return;
+
+        triggerStateMachineEvent({
+            type: 'key_press',
+            key: e.key
+        });
+        triggerStateMachineEvent({
+            type: 'keydown',
+            key: e.key
+        });
+    };
+
     window.addEventListener('pointermove', handleWindowPointerMove);
+    window.addEventListener('wheel', handleWindowWheel, { passive: false });
+    window.addEventListener('keydown', handleWindowKeyDown);
     return () => {
         window.removeEventListener('pointermove', handleWindowPointerMove);
+        window.removeEventListener('wheel', handleWindowWheel);
+        window.removeEventListener('keydown', handleWindowKeyDown);
     };
   }, [
     ui.mode, 
@@ -346,6 +395,16 @@ export const Canvas: React.FC = () => {
   ]);
 
   const handleDoubleClick = (e: React.MouseEvent) => {
+      if (ui.mode === 'play') {
+          const p = getCanvasPoint(e);
+          triggerStateMachineEvent({
+              type: 'double_click',
+              layerId: lastHoveredLayerRef.current || 'canvas',
+              point: p
+          });
+          return;
+      }
+
       if (ui.selectedTool === 'polyline') {
           if (polylinePoints.length > 1) addStrokeToCurrentKeyframe(polylinePoints, false, true);
           setPolylinePoints([]);
@@ -507,6 +566,100 @@ export const Canvas: React.FC = () => {
      return hit ? hit.strokeId : null;
   };
 
+  const triggerStateMachineEvent = (event: {
+    type: string;
+    layerId?: string | null;
+    scrollProgress?: number;
+    scrollDelta?: number;
+    key?: string;
+    point?: Point;
+    layerStrokes?: Stroke[];
+  }) => {
+    const currentProject = projectRef.current;
+    const currentUI = uiRef.current;
+    if (!currentProject.stateMachines || currentProject.stateMachines.length === 0) return;
+
+    const sm = currentProject.stateMachines.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines[0];
+    const currentNodeId = currentUI.activeStateNodeId || sm.entryNodeId;
+
+    const matchingTrans = sm.transitions.find(t => 
+      t.fromNodeId === currentNodeId && checkTransitionMatches(t, event)
+    );
+
+    if (matchingTrans) {
+      const targetNode = sm.nodes.find(n => n.id === matchingTrans.toNodeId);
+      if (!targetNode) return;
+
+      const fromStrokesMap: Record<string, Stroke[]> = {};
+      const toStrokesMap: Record<string, Stroke[]> = {};
+      const transDuration = Math.max(0, matchingTrans.duration ?? 0.35);
+
+      if (targetNode.type === 'clip' && targetNode.animationId) {
+        const targetAnim = currentProject.animations?.find(a => a.id === targetNode.animationId);
+        currentProject.layers.forEach(layer => {
+          fromStrokesMap[layer.id] = resolveLayerVisibleStrokes(currentProject, currentUI, layer.id);
+          const track = targetAnim?.tracks?.find(t => t.layerId === layer.id);
+          if (track && track.keyframes && track.keyframes.length > 0) {
+            toStrokesMap[layer.id] = evaluateLayerTimelineStrokes(
+              track,
+              0,
+              layer.interpolationMode || 'resample',
+              200,
+              targetAnim?.loopMode || 'loop',
+              targetAnim?.duration || 2.0,
+              layer
+            );
+          } else {
+            toStrokesMap[layer.id] = fromStrokesMap[layer.id] || [];
+          }
+        });
+
+        if (transDuration > 0.02) {
+          stateMachineTransitionRef.current = {
+            fromNodeId: currentNodeId,
+            toNodeId: targetNode.id,
+            startTime: performance.now(),
+            duration: transDuration * 1000,
+            easing: matchingTrans.easing || 'easeInOut',
+            fromStrokesMap,
+            toStrokesMap,
+            targetClipAnimationId: targetNode.animationId,
+            targetLayerId: targetNode.targetLayerId
+          };
+          useStore.getState().setActiveStateNode(targetNode.id);
+        } else {
+          useStore.getState().setActiveAnimation(targetNode.animationId);
+          useStore.getState().setTimelineCurrentTime(0);
+          useStore.getState().setTimelinePlaying(true);
+          useStore.getState().setActiveStateNode(targetNode.id);
+        }
+      } else if (targetNode.type === 'pose') {
+        currentProject.layers.forEach(layer => {
+          fromStrokesMap[layer.id] = resolveLayerVisibleStrokes(currentProject, currentUI, layer.id);
+          const targetLs = targetNode.poseData?.layerStates?.find(ls => ls.layerId === layer.id);
+          toStrokesMap[layer.id] = targetLs ? targetLs.strokes : [];
+        });
+
+        if (transDuration > 0.02) {
+          stateMachineTransitionRef.current = {
+            fromNodeId: currentNodeId,
+            toNodeId: targetNode.id,
+            startTime: performance.now(),
+            duration: transDuration * 1000,
+            easing: matchingTrans.easing || 'easeInOut',
+            fromStrokesMap,
+            toStrokesMap,
+            targetLayerId: targetNode.targetLayerId
+          };
+        }
+        if (targetNode.poseData?.axisValues) {
+          targetAxesRef.current = { ...targetAxesRef.current, ...targetNode.poseData.axisValues };
+        }
+        useStore.getState().setActiveStateNode(targetNode.id);
+      }
+    }
+  };
+
   const handlePointerDown = (e: React.PointerEvent) => {
     // Prevent default touch actions
     if (e.pointerType === 'touch') {
@@ -516,7 +669,30 @@ export const Canvas: React.FC = () => {
     const p = getCanvasPoint(e);
     
     if (ui.mode === 'play') {
-       // Interactive State Machine Trigger on Click
+       let hitLayerId: string | null = null;
+       for (const l of project.layers) {
+          if (!l.visible) continue;
+          const strokes = resolveLayerVisibleStrokes(project, ui, l.id);
+          const isHit = strokes.some(s => isPointInStroke(p, s.points) || ((s.closed || s.shapeConfig || (s.style?.fillColor && s.style?.fillColor !== 'none')) && isPointInsidePolygon(p, s.points)));
+          if (isHit) {
+             hitLayerId = l.id;
+             break;
+          }
+       }
+
+       // Trigger State Machine Click & Pointer Down with canvas hit point
+       triggerStateMachineEvent({
+          type: 'click',
+          layerId: hitLayerId || 'canvas',
+          point: p
+       });
+       triggerStateMachineEvent({
+          type: 'pointer_down',
+          layerId: hitLayerId || 'canvas',
+          point: p
+       });
+
+       // Interactive State Machine Trigger on Click (legacy backwards compatibility)
        if (project.interactions && project.interactions.length > 0) {
           const targetKf = project.keyframes.find(k => k.id === ui.selectedKeyframeId) || project.keyframes[0];
           const matchingInteraction = project.interactions.find(i => {
@@ -562,6 +738,41 @@ export const Canvas: React.FC = () => {
              const cx = col.circle?.x ?? col.x ?? 0;
              const cy = col.circle?.y ?? col.y ?? 0;
              const cr = col.circle?.radius ?? col.radius ?? 50;
+             isHit = distance(p, { x: cx, y: cy }) <= cr;
+          }
+          if (isHit) {
+             setInteractionMode('draggingCollider');
+             setTransformStart({
+                mouse: p,
+                center: { x: col.x ?? 0, y: col.y ?? 0 },
+                angle: 0,
+                width: col.width ?? 100,
+                height: col.height ?? 100,
+                points: []
+             });
+             (e.target as Element).setPointerCapture(e.pointerId);
+             return;
+          }
+       }
+    }
+
+    // Check if dragging State Machine Transition Collider in Edit Mode
+    if (ui.selectedGraphTransitionId && ui.mode === 'edit') {
+       const sm = project.stateMachines?.find(s => s.id === project.activeStateMachineId) || project.stateMachines?.[0];
+       const activeTrans = sm?.transitions.find(t => t.id === ui.selectedGraphTransitionId);
+       if (activeTrans && activeTrans.params?.collider) {
+          const col = activeTrans.params.collider;
+          let isHit = false;
+          if (col.type === 'rect') {
+             const rx = col.x ?? 0;
+             const ry = col.y ?? 0;
+             const rw = col.width ?? 100;
+             const rh = col.height ?? 100;
+             isHit = p.x >= rx && p.x <= rx + rw && p.y >= ry && p.y <= ry + rh;
+          } else if (col.type === 'circle') {
+             const cx = col.x ?? 0;
+             const cy = col.y ?? 0;
+             const cr = col.radius ?? 50;
              isHit = distance(p, { x: cx, y: cy }) <= cr;
           }
           if (isHit) {
@@ -730,7 +941,28 @@ export const Canvas: React.FC = () => {
     setMousePos(getSnappedPoint(p));
 
     if (ui.mode === 'play') {
-       // Interactive State Machine Trigger on Hover (Enter / Leave) with Collider support
+       // State Machine Hover detection
+       let hoveredLayerId: string | null = null;
+       for (const l of project.layers) {
+          if (!l.visible) continue;
+          const strokes = resolveLayerVisibleStrokes(project, ui, l.id);
+          const isHit = strokes.some(s => isPointInStroke(p, s.points) || ((s.closed || s.shapeConfig || (s.style?.fillColor && s.style?.fillColor !== 'none')) && isPointInsidePolygon(p, s.points)));
+          if (isHit) {
+             hoveredLayerId = l.id;
+             break;
+          }
+       }
+
+       if (hoveredLayerId !== lastHoveredLayerRef.current) {
+          if (hoveredLayerId) {
+             triggerStateMachineEvent({ type: 'hover_enter', layerId: hoveredLayerId, point: p });
+          } else if (lastHoveredLayerRef.current) {
+             triggerStateMachineEvent({ type: 'hover_leave', layerId: lastHoveredLayerRef.current, point: p });
+          }
+          lastHoveredLayerRef.current = hoveredLayerId;
+       }
+
+       // Interactive State Machine Trigger on Hover (Enter / Leave) with Collider support (legacy backwards compatibility)
        if (project.interactions && project.interactions.length > 0) {
           const targetKf = project.keyframes.find(k => k.id === ui.selectedKeyframeId) || project.keyframes[0];
           const currentHovered = new Set<string>();
@@ -795,21 +1027,13 @@ export const Canvas: React.FC = () => {
        return;
     }
 
-    if (interactionModeRef.current === 'draggingCollider' && transformStart && ui.editingColliderInteractionId) {
-       const activeInteraction = project.interactions?.find(i => i.id === ui.editingColliderInteractionId);
-       if (activeInteraction && activeInteraction.collider) {
-          const col = activeInteraction.collider;
-          const dx = p.x - transformStart.mouse.x;
-          const dy = p.y - transformStart.mouse.y;
-          if (col.type === 'rect') {
-             const origX = transformStart.center.x;
-             const origY = transformStart.center.y;
-             setInteractionCollider(activeInteraction.id, {
-                ...col,
-                x: Math.round(origX + dx),
-                y: Math.round(origY + dy)
-             });
-          } else if (col.type === 'circle') {
+    if (interactionModeRef.current === 'draggingCollider' && transformStart) {
+       if (ui.editingColliderInteractionId) {
+          const activeInteraction = project.interactions?.find(i => i.id === ui.editingColliderInteractionId);
+          if (activeInteraction && activeInteraction.collider) {
+             const col = activeInteraction.collider;
+             const dx = p.x - transformStart.mouse.x;
+             const dy = p.y - transformStart.mouse.y;
              const origX = transformStart.center.x;
              const origY = transformStart.center.y;
              setInteractionCollider(activeInteraction.id, {
@@ -818,8 +1042,29 @@ export const Canvas: React.FC = () => {
                 y: Math.round(origY + dy)
              });
           }
+          return;
+       } else if (ui.selectedGraphTransitionId) {
+          const sm = project.stateMachines?.find(s => s.id === project.activeStateMachineId) || project.stateMachines?.[0];
+          const activeTrans = sm?.transitions.find(t => t.id === ui.selectedGraphTransitionId);
+          if (activeTrans && activeTrans.params?.collider) {
+             const col = activeTrans.params.collider;
+             const dx = p.x - transformStart.mouse.x;
+             const dy = p.y - transformStart.mouse.y;
+             const origX = transformStart.center.x;
+             const origY = transformStart.center.y;
+             useStore.getState().updateStateTransition(activeTrans.id, {
+                params: {
+                   ...activeTrans.params,
+                   collider: {
+                      ...col,
+                      x: Math.round(origX + dx),
+                      y: Math.round(origY + dy)
+                   }
+                }
+             });
+          }
+          return;
        }
-       return;
     }
 
     if (interactionModeRef.current === 'drawingShape' && shapeDragStart) {
@@ -1055,9 +1300,16 @@ export const Canvas: React.FC = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (ui.mode !== 'play') {
-       (e.target as Element).releasePointerCapture(e.pointerId);
+    if (ui.mode === 'play') {
+       const p = getCanvasPoint(e);
+       triggerStateMachineEvent({
+          type: 'pointer_up',
+          layerId: lastHoveredLayerRef.current || 'canvas',
+          point: p
+       });
+       return;
     }
+    (e.target as Element).releasePointerCapture(e.pointerId);
 
     if (interactionModeRef.current === 'drawingShape' && shapeDragStart) {
         const startP = shapeDragStart.startPoint;
@@ -1197,8 +1449,47 @@ export const Canvas: React.FC = () => {
           interactiveTransitionRef.current = null;
         }
       } 
+
+      // 1b. State Machine Morph Transition
+      if (stateMachineTransitionRef.current) {
+        const smTrans = stateMachineTransitionRef.current;
+        const elapsed = performance.now() - smTrans.startTime;
+        const progress = Math.min(1, elapsed / Math.max(1, smTrans.duration));
+        if (progress >= 1) {
+          if (smTrans.targetClipAnimationId) {
+            useStore.getState().setActiveAnimation(smTrans.targetClipAnimationId);
+            useStore.getState().setTimelineCurrentTime(0);
+            useStore.getState().setTimelinePlaying(true);
+          }
+          stateMachineTransitionRef.current = null;
+        }
+      }
+
+      // 1c. State Machine Scroll Scrubbing for Clip Nodes
+      if (currentUI.mode === 'play' && activeAnim && currentUI.runtimeScrollProgress !== undefined) {
+        const sm = currentProject.stateMachines?.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines?.[0];
+        const activeNodeId = currentUI.activeStateNodeId || sm?.entryNodeId;
+        const activeNode = sm?.nodes.find(n => n.id === activeNodeId);
+        if (activeNode?.type === 'clip') {
+          const hasScrub = sm?.transitions.some(t => (t.toNodeId === activeNode.id || t.fromNodeId === activeNode.id) && t.trigger === 'scroll_scrub');
+          if (hasScrub) {
+            const scrubbedTime = currentUI.runtimeScrollProgress * activeAnim.duration;
+            useStore.getState().setTimelineCurrentTime(scrubbedTime);
+          }
+        }
+      }
+
       // 2. Timeline Playback Driver
-      else if (currentUI.timelinePlaying && activeAnim) {
+      const smForTimeline = currentProject.stateMachines?.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines?.[0];
+      const activeNodeForTimeline = smForTimeline?.nodes.find(n => n.id === (currentUI.activeStateNodeId || smForTimeline?.entryNodeId));
+      const hasTimelineLayers = currentProject.layers.some(l => l.driverMode === 'timeline');
+      const isClipActive = activeNodeForTimeline?.type === 'clip';
+
+      const shouldPlayTimeline = currentUI.timelinePlaying || (
+        currentUI.mode === 'play' && (hasTimelineLayers || isClipActive)
+      );
+
+      if (shouldPlayTimeline && activeAnim) {
         const { newTime, newDirection, isEnded } = advanceTimelineTime(
           currentUI.timelineCurrentTime,
           activeAnim.duration,
@@ -1208,16 +1499,14 @@ export const Canvas: React.FC = () => {
         );
         timelinePingPongDirRef.current = newDirection;
         
-        // Update target axes from timeline markers - DISABLED so Matrix layers remain fully independent
-        // const animAxes = evaluateTimelineAxes(activeAnim, newTime);
-        // targetAxesRef.current = { ...targetAxesRef.current, ...animAxes };
-
         // Sync timeline playhead smoothly
         useStore.getState().setTimelineCurrentTime(newTime);
 
         if (isEnded) {
           useStore.getState().setTimelinePlaying(false);
-          // Check for 'animation_end' interactions
+          // Trigger State Machine animation_end event
+          triggerStateMachineEvent({ type: 'animation_end' });
+          // Check for 'animation_end' interactions (legacy)
           if (currentProject.interactions) {
             const endInteraction = currentProject.interactions.find(i => 
               i.trigger === 'animation_end' && (!i.action.targetAnimationId || i.action.targetAnimationId === activeAnim.id)
@@ -1390,7 +1679,86 @@ export const Canvas: React.FC = () => {
       if (currentUI.onionSkinEnabled && currentUI.mode === 'edit') {
          const onionMode = currentUI.onionSkinMode || 'both';
 
-         if (currentUI.isTimelineOpen) {
+         // 1. STATE MACHINE POSE ONION SKINNING
+         const sm = currentProject.stateMachines?.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines?.[0];
+         const activePoseNodeId = currentUI.activeStateNodeId || currentUI.selectedGraphNodeId;
+         const activePoseNode = sm?.nodes.find(n => n.id === activePoseNodeId && n.type === 'pose');
+         const currentSelectedLayer = currentProject.layers.find(l => l.id === currentUI.selectedLayerId);
+         const isPoseMode = activePoseNode || currentSelectedLayer?.driverMode === 'pose';
+
+         if (isPoseMode && sm) {
+           const targetPose = activePoseNode || sm.nodes.find(n => n.type === 'pose' && (n.targetLayerId === currentUI.selectedLayerId || !n.targetLayerId));
+           const incomingNodeIds = targetPose ? sm.transitions.filter(t => t.toNodeId === targetPose.id).map(t => t.fromNodeId) : [];
+           const outgoingNodeIds = targetPose ? sm.transitions.filter(t => t.fromNodeId === targetPose.id).map(t => t.toNodeId) : [];
+
+           const posesToRender: { node: typeof sm.nodes[0]; color: string; label: string }[] = [];
+
+           sm.nodes.forEach(n => {
+             if (n.type !== 'pose' || !n.poseData?.layerStates || n.poseData.layerStates.length === 0) return;
+             if (targetPose && n.id === targetPose.id) return;
+
+             if (incomingNodeIds.includes(n.id)) {
+               if (onionMode === 'both' || onionMode === 'prev') {
+                 posesToRender.push({ node: n, color: '#06B6D4', label: 'Pose Précédente' });
+               }
+             } else if (outgoingNodeIds.includes(n.id)) {
+               if (onionMode === 'both' || onionMode === 'next') {
+                 posesToRender.push({ node: n, color: '#F97316', label: 'Pose Suivante' });
+               }
+             } else if (incomingNodeIds.length === 0 && outgoingNodeIds.length === 0) {
+               // If no transitions exist, render other poses of this layer
+               const sameLayer = (!n.targetLayerId && !targetPose?.targetLayerId) ||
+                                 (n.targetLayerId === targetPose?.targetLayerId) ||
+                                 (n.targetLayerId === currentUI.selectedLayerId);
+               if (sameLayer) {
+                 posesToRender.push({ node: n, color: '#8B5CF6', label: 'Autre Pose' });
+               }
+             }
+           });
+
+           posesToRender.forEach(({ node, color }) => {
+             node.poseData?.layerStates.forEach(ls => {
+               const targetLayer = currentProject.layers.find(l => l.id === ls.layerId);
+               if (!targetLayer || !targetLayer.visible) return;
+
+               const isLayerActive = targetLayer.id === currentUI.selectedLayerId;
+               if (!isLayerActive && currentUI.inactiveLayerMode === 'hidden') return;
+
+               ls.strokes.forEach(s => {
+                 if (!s.points || s.points.length === 0) return;
+                 const isSpline = targetLayer.interpolationMode === 'spline';
+                 const resolvedStyle = resolveStrokeStyle(s, targetLayer);
+                 const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
+                 const strokeRadii = s.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                 const isQuadShape = s.points.length === 4 || s.points.length === 5;
+
+                 ctx.save();
+                 ctx.globalAlpha = Math.min(0.8, (currentUI.onionSkinOpacity ?? 0.35) * (targetLayer.opacity ?? 1));
+
+                 if (isSpline) {
+                   drawCatmullRomSpline(ctx, s.points, 0.5);
+                 } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
+                   drawRoundedRectangle(ctx, s.points, strokeRadii, cornerRoundness);
+                 } else {
+                   ctx.beginPath();
+                   if (cornerRoundness > 0) {
+                     drawCornerRoundedPath(ctx, s.points, cornerRoundness);
+                   } else {
+                     ctx.moveTo(s.points[0].x, s.points[0].y);
+                     for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+                   }
+                   if (s.closed) ctx.closePath();
+                 }
+
+                 ctx.strokeStyle = color;
+                 ctx.lineWidth = Math.max(1.5, (resolvedStyle.strokeWidth || 2) * 0.8);
+                 ctx.setLineDash([4, 4]);
+                 ctx.stroke();
+                 ctx.restore();
+               });
+             });
+           });
+         } else if (currentUI.isTimelineOpen) {
            // TIMELINE ONION SKINNING: Show previous keyframe pose (cyan) and next keyframe pose (orange)
            const activeAnim = currentProject.animations?.find(a => a.id === currentUI.activeAnimationId) || currentProject.animations?.[0];
            const currentTime = currentUI.timelineCurrentTime ?? 0;
@@ -1636,12 +2004,105 @@ export const Canvas: React.FC = () => {
           return;
         }
 
-        // Timeline Driver Mode: evaluate layer temporally from its timeline track ONLY if driverMode === 'timeline'
-        const isTimelineDriving = layer.driverMode === 'timeline' && currentUI.expertModeEnabled;
+        // State Machine Pose / Transition Interpolation in Play Mode or when State Machine is active/open
+        if ((currentUI.mode === 'play' || currentUI.isStateMachineOpen || currentUI.activeStateNodeId) && currentProject.stateMachines && currentProject.stateMachines.length > 0) {
+          let smStrokes: Stroke[] | null = null;
+          const sm = currentProject.stateMachines.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines[0];
+          const activeNodeId = currentUI.activeStateNodeId || (currentUI.mode === 'play' ? sm.entryNodeId : null);
+          const activeNode = activeNodeId ? sm.nodes.find(n => n.id === activeNodeId) : null;
+          const isLayerTargeted = !activeNode?.targetLayerId || activeNode.targetLayerId === 'all' || activeNode.targetLayerId === layer.id;
+
+          if (stateMachineTransitionRef.current) {
+            const trans = stateMachineTransitionRef.current;
+            const isTransitionTargeted = !trans.targetLayerId || trans.targetLayerId === 'all' || trans.targetLayerId === layer.id;
+            if (isTransitionTargeted) {
+              const elapsed = performance.now() - trans.startTime;
+              const prog = Math.min(1, elapsed / Math.max(1, trans.duration));
+              const easedProg = evaluateEasing(prog, trans.easing || 'easeInOut');
+              const strokesA = trans.fromStrokesMap[layer.id] || [];
+              const strokesB = trans.toStrokesMap[layer.id] || [];
+              if (strokesA.length > 0 || strokesB.length > 0) {
+                smStrokes = interpolateStrokesDirect(strokesA, strokesB, easedProg, layer.interpolationMode || 'linear', layer);
+              }
+            }
+          } else if (isLayerTargeted && activeNode) {
+            if (activeNode.type === 'pose' && activeNode.poseData?.layerStates) {
+              const ls = activeNode.poseData.layerStates.find(s => s.layerId === layer.id);
+              if (ls && ls.strokes && ls.strokes.length > 0) {
+                smStrokes = ls.strokes;
+              }
+            }
+          }
+
+          if (smStrokes && smStrokes.length > 0) {
+            smStrokes.forEach(s => {
+              if (!s.points || s.points.length === 0) return;
+              const resolvedStyle = resolveStrokeStyle(s, layer);
+              let sFill = isInactiveWireframe ? 'none' : resolvedStyle.fillColor;
+              let sColor = resolvedStyle.strokeColor;
+              let sWidth = isInactiveWireframe ? 1 : resolvedStyle.strokeWidth;
+              const rRoundness = resolvedStyle.cornerRoundness ?? 0;
+              const rRadii = s.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+              const isRectangleShape = s.shapeConfig?.type === 'rectangle';
+
+              if (layer.interpolationMode === 'spline') {
+                drawCatmullRomSpline(ctx, s.points, 0.5);
+              } else if (isRectangleShape && (rRadii || rRoundness > 0)) {
+                drawRoundedRectangle(ctx, s.points, rRadii, rRoundness);
+              } else {
+                ctx.beginPath();
+                if (rRoundness > 0) {
+                  drawCornerRoundedPath(ctx, s.points, rRoundness);
+                } else {
+                  ctx.moveTo(s.points[0].x, s.points[0].y);
+                  for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+                }
+                if (s.closed) ctx.closePath();
+              }
+
+              ctx.globalAlpha = layerGlobalAlpha;
+              switch(layer.blendMode) {
+                case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+                case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+                case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+                case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+                case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+                default: ctx.globalCompositeOperation = 'source-over';
+              }
+
+              if (sFill && sFill !== 'none') {
+                ctx.fillStyle = sFill;
+                ctx.fill();
+              }
+              if (sColor && sColor !== 'none') {
+                ctx.lineCap = currentUI.strokeCap || 'round';
+                ctx.lineJoin = 'round';
+                ctx.strokeStyle = sColor;
+                ctx.lineWidth = sWidth;
+                ctx.stroke();
+              }
+            });
+
+            ctx.globalAlpha = 1.0;
+            ctx.globalCompositeOperation = 'source-over';
+            return;
+          }
+        }
+
+        // Timeline Driver Mode: evaluate layer temporally from its timeline track
+        const smForTrack = currentProject.stateMachines?.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines?.[0];
+        const activeNodeForTrack = smForTrack ? smForTrack.nodes.find(n => n.id === (currentUI.activeStateNodeId || (currentUI.mode === 'play' ? smForTrack.entryNodeId : null))) : null;
+        const activeAnim = currentProject.animations?.find(a => a.id === currentUI.activeAnimationId) || currentProject.animations?.[0];
+        const track = activeAnim?.tracks?.find(t => t.layerId === layer.id);
+        const hasTrack = !!(track && track.keyframes && track.keyframes.length > 0);
+
+        const isTimelineDriving = 
+          (layer.driverMode === 'timeline' && hasTrack) ||
+          (currentUI.timelinePlaying && hasTrack) ||
+          (currentUI.isTimelineOpen && hasTrack) ||
+          (currentUI.mode === 'play' && hasTrack && (!activeNodeForTrack || activeNodeForTrack.type === 'clip' || (activeNodeForTrack.type === 'pose' && activeNodeForTrack.targetLayerId !== layer.id)));
+
         if (isTimelineDriving) {
-          const activeAnim = currentProject.animations?.find(a => a.id === currentUI.activeAnimationId) || currentProject.animations?.[0];
-          const track = activeAnim?.tracks?.find(t => t.layerId === layer.id);
-          
           if (track && track.keyframes && track.keyframes.length > 0) {
             const tTime = currentUI.timelineCurrentTime ?? 0;
             const evalStrokes = evaluateLayerTimelineStrokes(
@@ -1784,7 +2245,7 @@ export const Canvas: React.FC = () => {
             const stiffness = (currentUI.overshootVertexInertiaFactor ?? 0.6) * 120.0;
             const damping = (currentUI.overshootVertexDamping ?? 0.75) * 35.0;
             const mass = Math.max(0.1, currentUI.overshootVertexMass ?? 1.0);
-            const inertiaKey = `layer-${layer.id}`;
+            const inertiaKey = `layer-${layer.id}-stroke-${strokeId}`;
             let stored = vertexInertiaRef.current.get(inertiaKey);
 
             if (!stored || stored.current.length !== interpolatedPoints.length) {
@@ -2189,6 +2650,57 @@ export const Canvas: React.FC = () => {
             ctx.fillStyle = isSelected ? '#2563EB' : 'rgba(37, 99, 235, 0.6)';
             ctx.font = 'bold 10px monospace';
             ctx.fillText(`[Collider: ${interaction.name || 'Zone'}]`, cx - cr, Math.max(12, cy - cr - 4));
+            ctx.restore();
+          }
+        });
+      }
+
+      // Render Visual Collider Box / Circle for State Machine Transitions in Edit Mode
+      if (currentUI.mode === 'edit' && (currentUI.isInteractionsOpen || currentUI.isStateMachineOpen) && currentProject.stateMachines) {
+        const sm = currentProject.stateMachines.find(s => s.id === currentProject.activeStateMachineId) || currentProject.stateMachines[0];
+        sm?.transitions.forEach(trans => {
+          if (!trans.params?.collider) return;
+          const col = trans.params.collider;
+          const isSelected = currentUI.selectedGraphTransitionId === trans.id;
+          
+          if (col.type === 'rect') {
+            const rx = col.x ?? 0;
+            const ry = col.y ?? 0;
+            const rw = col.width ?? 100;
+            const rh = col.height ?? 100;
+
+            ctx.save();
+            ctx.strokeStyle = isSelected ? '#6366F1' : 'rgba(99, 102, 241, 0.45)';
+            ctx.lineWidth = isSelected ? 2 : 1;
+            ctx.setLineDash(isSelected ? [5, 4] : [3, 3]);
+            ctx.fillStyle = isSelected ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.05)';
+            ctx.fillRect(rx, ry, rw, rh);
+            ctx.strokeRect(rx, ry, rw, rh);
+
+            // Label
+            ctx.fillStyle = isSelected ? '#4F46E5' : 'rgba(79, 70, 229, 0.7)';
+            ctx.font = 'bold 10px monospace';
+            ctx.fillText(`[Zone: ${trans.name || 'Transition'}]`, rx + 4, Math.max(12, ry - 4));
+            ctx.restore();
+          } else if (col.type === 'circle') {
+            const cx = col.x ?? 0;
+            const cy = col.y ?? 0;
+            const cr = col.radius ?? 50;
+
+            ctx.save();
+            ctx.strokeStyle = isSelected ? '#6366F1' : 'rgba(99, 102, 241, 0.45)';
+            ctx.lineWidth = isSelected ? 2 : 1;
+            ctx.setLineDash(isSelected ? [5, 4] : [3, 3]);
+            ctx.fillStyle = isSelected ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.05)';
+            ctx.beginPath();
+            ctx.arc(cx, cy, cr, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            // Label
+            ctx.fillStyle = isSelected ? '#4F46E5' : 'rgba(79, 70, 229, 0.7)';
+            ctx.font = 'bold 10px monospace';
+            ctx.fillText(`[Zone: ${trans.name || 'Transition'}]`, cx - cr, Math.max(12, cy - cr - 4));
             ctx.restore();
           }
         });

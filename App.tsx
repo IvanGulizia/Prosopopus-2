@@ -6,6 +6,7 @@ import { AxisMap } from './components/AxisMap';
 import { DebugMenu } from './components/DebugMenu';
 import { Timeline } from './components/Timeline';
 import { InteractionsPanel } from './components/InteractionsPanel';
+import { StateMachineGraph } from './components/StateMachineGraph';
 import { useStore } from './store/useStore';
 
 function App() {
@@ -67,9 +68,11 @@ function App() {
       {isEditMode && ui.expertModeEnabled && (
         <>
           <Timeline />
-          <InteractionsPanel />
         </>
       )}
+
+      {/* Floating State Machine Graph Window (available in Edit & Play Mode) */}
+      {ui.isInteractionsOpen && <StateMachineGraph />}
       
       {/* Matrix is strictly for Editing, and hidden when Timeline is open */}
       {isEditMode && (!ui.expertModeEnabled || !ui.isTimelineOpen) && <AxisMap />}

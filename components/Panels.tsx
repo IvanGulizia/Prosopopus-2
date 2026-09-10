@@ -18,6 +18,30 @@ export const LayerPanel: React.FC = () => {
   const [editingLayerName, setEditingLayerName] = useState<string>("");
   const renameInputRef = useRef<HTMLInputElement>(null);
 
+  // Resize Panel State
+  const [panelWidth, setPanelWidth] = useState<number>(288);
+
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const newWidth = Math.max(220, Math.min(600, startWidth + deltaX));
+      setPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
   // Toggle Button (Visible when panel is closed)
   if (!ui.isLayerPanelOpen) {
     return (
@@ -92,8 +116,8 @@ export const LayerPanel: React.FC = () => {
   return (
     <div 
       onClick={(e) => e.stopPropagation()}
-      className="absolute left-6 top-28 w-72 backdrop-blur-xl rounded-3xl shadow-2xl border overflow-hidden flex flex-col max-h-[60vh] pointer-events-auto transition-all duration-300"
-      style={{ backgroundColor: `${theme.bgPanel}EE`, borderColor: theme.border, color: theme.textMain }}
+      className="absolute left-6 top-28 backdrop-blur-xl rounded-3xl shadow-2xl border overflow-hidden flex flex-col max-h-[60vh] pointer-events-auto"
+      style={{ width: panelWidth, backgroundColor: `${theme.bgPanel}EE`, borderColor: theme.border, color: theme.textMain }}
     >
       <div className="p-5 border-b flex justify-between items-center" style={{ borderColor: theme.border, backgroundColor: `${theme.bgPanel}55` }}>
         <div>
@@ -210,21 +234,32 @@ export const LayerPanel: React.FC = () => {
                    </button>
                  )}
 
-                 {/* Driver Mode Toggle (Matrix vs Timeline) */}
+                 {ui.expertModeEnabled && (
+                  <>
+                  {/* Driver Mode Toggle (Matrix vs Timeline vs Pose) */}
                  <button 
                     onClick={(e) => { 
                        e.stopPropagation(); 
-                       setLayerDriverMode(layer.id, (layer.driverMode === 'timeline' ? 'matrix' : 'timeline')); 
+                       const nextMode = layer.driverMode === "timeline" ? "pose" : layer.driverMode === "pose" ? "matrix" : "timeline";
+                       setLayerDriverMode(layer.id, nextMode); 
                     }}
                     className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
-                        layer.driverMode === 'timeline' 
-                        ? 'text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100' 
-                        : 'text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100'
+                        layer.driverMode === "timeline"
+                        ? "text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100"
+                        : layer.driverMode === "pose"
+                        ? "text-emerald-600 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+                        : "text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100"
                     }`}
-                    title={layer.driverMode === 'timeline' ? 'Mode Driver: Timeline temporelle' : 'Mode Driver: Matrice 2D spatiale'}
+                    title={
+                      layer.driverMode === "timeline" ? "Mode Driver: Timeline temporelle" :
+                      layer.driverMode === "pose" ? "Mode Driver: Pose (Machine à états / Hors-Timeline)" :
+                      "Mode Driver: Matrice 2D spatiale"
+                    }
                  >
-                    {layer.driverMode === 'timeline' ? 'TIME' : 'MTX'}
+                    {layer.driverMode === "timeline" ? "TIME" : layer.driverMode === "pose" ? "POSE" : "MTX"}
                  </button>
+                  </>
+                 )}
 
                  {/* Interpolation Mode Toggle */}
                  <button 
@@ -273,6 +308,14 @@ export const LayerPanel: React.FC = () => {
             </div>
           </div>
         ))}
+      </div>
+      
+      {/* Right Edge Resizer Handle */}
+      <div 
+        onMouseDown={handleResizeMouseDown}
+        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-indigo-500/10 active:bg-indigo-500/20 transition-colors z-50 flex items-center justify-center group"
+      >
+        <div className="w-[1px] h-8 bg-gray-400/40 rounded-full group-hover:bg-indigo-500/80 transition-colors" />
       </div>
     </div>
   );
@@ -357,7 +400,7 @@ export const SettingsPanel: React.FC = () => {
   
   const { theme, isSettingsOpen } = ui;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [openSections, setOpenSections] = useState<string[]>(['expert-mode', 'cursor', 'layer-styles']);
+  const [openSections, setOpenSections] = useState<string[]>([]);
   const [applyToAllStates, setApplyToAllStates] = useState(false);
   const [embedJsonUrl, setEmbedJsonUrl] = useState('');
 
@@ -503,54 +546,6 @@ export const SettingsPanel: React.FC = () => {
 
       <div className="p-6 pb-12 space-y-4 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
         
-        {/* SECTION: EXPERT MODE (TIMELINE & STATE MACHINE) */}
-        <SettingsSection 
-            title="Mode Expert (Timeline & State Machine)" 
-            isOpen={openSections.includes('expert-mode')}
-            onToggle={() => toggleSection('expert-mode')}
-            theme={theme}
-        >
-             <div className="space-y-3">
-                 <SettingsToggle 
-                     label="Activer le Mode Expert" 
-                     active={ui.expertModeEnabled} 
-                     onClick={toggleExpertMode} 
-                 />
-                 <p className="text-[11px] text-gray-500 leading-relaxed">
-                     Active la Timeline d'animation temporelle (keyframes, boucles, pingpong, courbes d'interpolation) et le State Machine interactif (déclencheurs au clic/hover sur calques ou canevas).
-                 </p>
-
-                 {ui.expertModeEnabled && (
-                     <div className="pt-2 border-t border-gray-100 space-y-2">
-                         <div className="flex gap-2">
-                             <button
-                                 onClick={toggleTimelinePanel}
-                                 className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all ${
-                                     ui.isTimelineOpen 
-                                         ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                                         : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                                 }`}
-                             >
-                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                 {ui.isTimelineOpen ? 'Fermer Timeline' : 'Ouvrir Timeline'}
-                             </button>
-                             <button
-                                 onClick={toggleInteractionsPanel}
-                                 className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all ${
-                                     ui.isInteractionsOpen 
-                                         ? 'bg-purple-600 text-white border-purple-600 shadow-sm' 
-                                         : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                                 }`}
-                             >
-                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                                 {ui.isInteractionsOpen ? 'Fermer Interactions' : 'Interactions'}
-                             </button>
-                         </div>
-                     </div>
-                 )}
-             </div>
-        </SettingsSection>
-
         {/* SECTION: LAYER GLOBAL STYLES */}
         <SettingsSection 
             title="Layer Global Styles" 
@@ -1608,7 +1603,56 @@ export const SettingsPanel: React.FC = () => {
              </div>
         </SettingsSection>
 
-      </div>
+      
+         {/* SECTION: EXPERT MODE */}
+         <SettingsSection 
+             title="Mode Expert" 
+             isOpen={openSections.includes('expert-mode')}
+             onToggle={() => toggleSection('expert-mode')}
+             theme={theme}
+         >
+              <div className="space-y-3">
+                  <SettingsToggle 
+                      label="Activer le Mode Expert" 
+                      active={ui.expertModeEnabled} 
+                      onClick={toggleExpertMode} 
+                  />
+                  <p className="text-[11px] text-gray-500 leading-relaxed">
+                      Active la Timeline d'animation temporelle (keyframes, boucles, pingpong, courbes d'interpolation) et le State Machine interactif (déclencheurs au clic/hover sur calques ou canevas).
+                  </p>
+
+                  {ui.expertModeEnabled && (
+                      <div className="pt-2 border-t border-gray-100 space-y-2">
+                          <div className="flex gap-2">
+                              <button
+                                  onClick={toggleTimelinePanel}
+                                  className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all ${
+                                      ui.isTimelineOpen 
+                                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                  }`}
+                              >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                  {ui.isTimelineOpen ? 'Fermer Timeline' : 'Ouvrir Timeline'}
+                              </button>
+                              <button
+                                  onClick={toggleInteractionsPanel}
+                                  className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all ${
+                                      ui.isInteractionsOpen 
+                                          ? 'bg-purple-600 text-white border-purple-600 shadow-sm' 
+                                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                  }`}
+                              >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                  {ui.isInteractionsOpen ? 'Fermer Interactions' : 'Interactions'}
+                              </button>
+                          </div>
+                      </div>
+                  )}
+              </div>
+         </SettingsSection>
+
+</div>
 
       {/* Export Modal Overlay */}
       {isExporting && (

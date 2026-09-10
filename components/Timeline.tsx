@@ -17,7 +17,8 @@ import {
   X,
   Check,
   Eye,
-  EyeOff
+  EyeOff,
+  Pencil
 } from 'lucide-react';
 import { EasingType, LoopMode, LayerTimelineKeyframe, LayerTimelineTrack } from '../types';
 
@@ -80,6 +81,7 @@ export const Timeline: React.FC = () => {
     setTimelineCurrentTime,
     setTimelinePlaying,
     addAnimation,
+    renameAnimation,
     setAnimationDuration,
     setAnimationLoopMode,
     setActiveAnimation,
@@ -136,6 +138,9 @@ export const Timeline: React.FC = () => {
 
   const [isEditingDuration, setIsEditingDuration] = useState(false);
   const [durationInput, setDurationInput] = useState('2.0');
+
+  const [isEditingAnimName, setIsEditingAnimName] = useState(false);
+  const [animNameInput, setAnimNameInput] = useState('');
 
   const animations = project.animations || [];
   const currentAnimation = animations.find(a => a.id === (activeAnimationId || project.activeAnimationId)) || animations[0];
@@ -391,28 +396,86 @@ export const Timeline: React.FC = () => {
             <span>Pelure d'oignon</span>
           </button>
 
-          {/* Animation Selector */}
-          <select
-            value={currentAnimation?.id || ''}
-            onChange={(e) => {
-              if (e.target.value === '__new__') {
-                addAnimation();
-              } else {
-                setActiveAnimation(e.target.value);
-              }
-            }}
-            className="bg-transparent border rounded-xl px-2 py-1 text-xs font-semibold outline-none cursor-pointer"
-            style={{ borderColor: theme.border, color: theme.textMain }}
-          >
-            {animations.map(anim => (
-              <option key={anim.id} value={anim.id} style={{ backgroundColor: theme.bgPanel, color: theme.textMain }}>
-                {anim.name} ({anim.duration}s)
-              </option>
-            ))}
-            <option value="__new__" style={{ backgroundColor: theme.bgPanel, color: theme.textMain }}>
-              + Nouvelle Animation...
-            </option>
-          </select>
+          {/* Animation Selector & Rename */}
+          <div className="flex items-center gap-1">
+            {isEditingAnimName ? (
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={animNameInput}
+                  onChange={(e) => setAnimNameInput(e.target.value)}
+                  autoFocus
+                  onBlur={() => {
+                    setIsEditingAnimName(false);
+                    if (currentAnimation && animNameInput.trim()) {
+                      renameAnimation(currentAnimation.id, animNameInput.trim());
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      setIsEditingAnimName(false);
+                      if (currentAnimation && animNameInput.trim()) {
+                        renameAnimation(currentAnimation.id, animNameInput.trim());
+                      }
+                    } else if (e.key === 'Escape') {
+                      setIsEditingAnimName(false);
+                    }
+                  }}
+                  className="bg-black/10 dark:bg-white/10 border rounded-xl px-2 py-0.5 text-xs font-semibold outline-none w-32"
+                  style={{ borderColor: theme.accent, color: theme.textMain }}
+                />
+                <button
+                  onClick={() => {
+                    setIsEditingAnimName(false);
+                    if (currentAnimation && animNameInput.trim()) {
+                      renameAnimation(currentAnimation.id, animNameInput.trim());
+                    }
+                  }}
+                  className="p-1 rounded hover:bg-emerald-500/20 text-emerald-500"
+                  title="Valider le nom"
+                >
+                  <Check size={12} />
+                </button>
+              </div>
+            ) : (
+              <>
+                <select
+                  value={currentAnimation?.id || ''}
+                  onChange={(e) => {
+                    if (e.target.value === '__new__') {
+                      addAnimation();
+                    } else {
+                      setActiveAnimation(e.target.value);
+                    }
+                  }}
+                  className="bg-transparent border rounded-xl px-2 py-1 text-xs font-semibold outline-none cursor-pointer"
+                  style={{ borderColor: theme.border, color: theme.textMain }}
+                >
+                  {animations.map(anim => (
+                    <option key={anim.id} value={anim.id} style={{ backgroundColor: theme.bgPanel, color: theme.textMain }}>
+                      {anim.name} ({anim.duration}s)
+                    </option>
+                  ))}
+                  <option value="__new__" style={{ backgroundColor: theme.bgPanel, color: theme.textMain }}>
+                    + Nouvelle Animation...
+                  </option>
+                </select>
+
+                {currentAnimation && (
+                  <button
+                    onClick={() => {
+                      setAnimNameInput(currentAnimation.name);
+                      setIsEditingAnimName(true);
+                    }}
+                    className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 opacity-60 hover:opacity-100 transition-opacity"
+                    title="Renommer l'animation actuelle"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* Right: Duration Setting & Minimize */}

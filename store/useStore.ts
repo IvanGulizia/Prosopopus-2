@@ -1,8 +1,9 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig, AnimationTimeline, TimelineKeyframeMarker, EasingType, LoopMode, LayerInteraction, InteractionTrigger, InteractionAction, LayerDriverMode, LayerTimelineTrack, LayerTimelineKeyframe, InteractionCollider } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig, AnimationTimeline, TimelineKeyframeMarker, EasingType, LoopMode, LayerInteraction, InteractionTrigger, InteractionAction, LayerDriverMode, LayerTimelineTrack, LayerTimelineKeyframe, InteractionCollider, StateMachine, StateNode, StateTransition, StateNodeType, StateTransitionTrigger } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME, DEFAULT_ANIMATION } from '../constants';
 import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour, generateShapePoints } from '../utils/math';
+import { getOrCreateDefaultStateMachine } from '../utils/stateMachine';
 
 interface StoreState {
   project: Project;
@@ -59,6 +60,26 @@ interface StoreState {
   setInteractionCollider: (id: string, collider: InteractionCollider) => void;
   setEditingColliderInteractionId: (interactionId: string | null) => void;
 
+  // Visual State Machine Graph Actions (Rive / Unity Animator Style)
+  ensureStateMachine: () => StateMachine;
+  addStateNode: (node: Omit<StateNode, 'id'>) => string;
+  updateStateNode: (nodeId: string, updates: Partial<StateNode>) => void;
+  deleteStateNode: (nodeId: string) => void;
+  addStateTransition: (transition: Omit<StateTransition, 'id'>) => string;
+  updateStateTransition: (transitionId: string, updates: Partial<StateTransition>) => void;
+  deleteStateTransition: (transitionId: string) => void;
+  captureCurrentPoseToStateNode: (nodeId: string) => void;
+  applyPoseStateNodeToCanvas: (nodeId: string) => void;
+  createPoseStateNodeFromCurrent: (name?: string, x?: number, y?: number) => string;
+  createClipStateNode: (animationId: string, x?: number, y?: number) => string;
+  setGraphWindowPosition: (position: { x: number; y: number }) => void;
+  setGraphWindowSize: (size: { width: number; height: number }) => void;
+  setGraphWindowMaximized: (maximized: boolean) => void;
+  setSelectedGraphNode: (nodeId: string | null) => void;
+  setSelectedGraphTransition: (transitionId: string | null) => void;
+  setActiveStateNode: (nodeId: string | null) => void;
+  setRuntimeScrollProgress: (progress: number) => void;
+
   // Project Actions
   resetProject: () => void;
   loadProject: (project: Project) => void;
@@ -97,6 +118,7 @@ interface StoreState {
   setAxisMatrixPadding: (val: number) => void;
   setInterpolationExponent: (val: number) => void;
   setInterpolationStrategy: (val: InterpolationStrategy) => void;
+  setGridCurvature: (val: number) => void;
   
   togglePlayModePhysics: () => void;
   setSpringStiffness: (val: number) => void;
@@ -115,6 +137,7 @@ interface StoreState {
   setOvershootVertexInertiaFactor: (val: number) => void;
   setOvershootVertexDamping: (val: number) => void;
   setOvershootVertexMass: (val: number) => void;
+  setOvershootVertexSnapProtection: (val: number) => void;
   toggleOvershootExaggeration: () => void;
   setOvershootExaggerationFactor: (val: number) => void;
 
@@ -1045,6 +1068,7 @@ export const useStore = create<StoreState>((set, get) => ({
   setAxisMatrixPadding: (val) => set((state) => ({ ui: { ...state.ui, axisMatrixPadding: val } })),
   setInterpolationExponent: (val) => set((state) => ({ ui: { ...state.ui, interpolationExponent: val } })),
   setInterpolationStrategy: (val) => set((state) => ({ ui: { ...state.ui, interpolationStrategy: val } })),
+  setGridCurvature: (val) => set((state) => ({ ui: { ...state.ui, gridCurvature: val } })),
   
   togglePlayModePhysics: () => set((state) => ({ ui: { ...state.ui, playModePhysics: !state.ui.playModePhysics } })),
   setSpringStiffness: (val) => set((state) => ({ ui: { ...state.ui, springStiffness: val } })),
@@ -1063,6 +1087,7 @@ export const useStore = create<StoreState>((set, get) => ({
   setOvershootVertexInertiaFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexInertiaFactor: val } })),
   setOvershootVertexDamping: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexDamping: val } })),
   setOvershootVertexMass: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexMass: val } })),
+  setOvershootVertexSnapProtection: (val) => set((state) => ({ ui: { ...state.ui, overshootVertexSnapProtection: val } })),
   toggleOvershootExaggeration: () => set((state) => ({ ui: { ...state.ui, overshootExaggerationEnabled: !state.ui.overshootExaggerationEnabled } })),
   setOvershootExaggerationFactor: (val) => set((state) => ({ ui: { ...state.ui, overshootExaggerationFactor: val } })),
 
@@ -1442,13 +1467,20 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
-    // Automatically sync shape stroke into Timeline track if Timeline is open or layer is timeline-driven
+    // Pose Editing Mode Check:
+    // If current layer is 'pose' or an active/selected Pose node is present, do NOT create timeline keyframes
+    const currentSM = state.project.stateMachines?.find(s => s.id === state.project.activeStateMachineId) || state.project.stateMachines?.[0];
+    const activePoseNodeId = state.ui.activeStateNodeId || state.ui.selectedGraphNodeId;
+    const activePoseNode = currentSM?.nodes.find(n => n.id === activePoseNodeId && n.type === 'pose');
+    const isPoseEditing = !!activePoseNode || layer?.driverMode === 'pose';
+
+    // Automatically sync shape stroke into Timeline track if Timeline is open or layer is timeline-driven (and not pose mode)
     let updatedAnimations = state.project.animations && state.project.animations.length > 0
       ? state.project.animations
       : [DEFAULT_ANIMATION];
     let createdTlKeyframeId: string | null = state.ui.selectedTimelineKeyframeId;
 
-    if (state.ui.isTimelineOpen || layer?.driverMode === 'timeline') {
+    if (!isPoseEditing && (state.ui.isTimelineOpen || layer?.driverMode === 'timeline')) {
       const activeAnimId = state.ui.activeAnimationId || state.project.activeAnimationId || updatedAnimations[0].id;
       const targetTime = Math.round((state.ui.timelineCurrentTime ?? 0) * 100) / 100;
 
@@ -1524,8 +1556,50 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
+    // Auto-sync into active Pose Node!
+    let updatedStateMachines = state.project.stateMachines;
+    if (activePoseNode && updatedStateMachines) {
+      updatedStateMachines = updatedStateMachines.map(sm => {
+        if (sm.id !== currentSM?.id) return sm;
+        const updatedNodes = sm.nodes.map(n => {
+          if (n.id !== activePoseNode.id) return n;
+          const currentLs = n.poseData?.layerStates || [];
+          const existingLsIdx = currentLs.findIndex(ls => ls.layerId === selectedLayerId);
+          let newLs: LayerState[];
+          if (isGuideLayer) {
+            if (existingLsIdx >= 0) {
+              newLs = currentLs.map((ls, idx) => idx === existingLsIdx ? { ...ls, strokes: [...ls.strokes, newStroke] } : ls);
+            } else {
+              newLs = [...currentLs, { layerId: selectedLayerId, strokes: [newStroke] }];
+            }
+          } else {
+            if (existingLsIdx >= 0) {
+              newLs = currentLs.map((ls, idx) => idx === existingLsIdx ? { ...ls, strokes: [newStroke] } : ls);
+            } else {
+              newLs = [...currentLs, { layerId: selectedLayerId, strokes: [newStroke] }];
+            }
+          }
+          return {
+            ...n,
+            targetLayerId: n.targetLayerId && n.targetLayerId !== 'all' ? n.targetLayerId : selectedLayerId,
+            poseData: {
+              ...(n.poseData || {}),
+              layerStates: newLs
+            }
+          };
+        });
+        return { ...sm, nodes: updatedNodes };
+      });
+    }
+
     return {
-      project: { ...state.project, layers: finalLayers, keyframes: newKeyframes, animations: updatedAnimations },
+      project: {
+        ...state.project,
+        layers: finalLayers,
+        keyframes: newKeyframes,
+        animations: updatedAnimations,
+        stateMachines: updatedStateMachines
+      },
       ui: { 
         ...state.ui, 
         selectedKeyframeId: targetKeyframeId,
@@ -2648,10 +2722,16 @@ export const useStore = create<StoreState>((set, get) => ({
       return kf;
     });
 
-    // Also update in Timeline track if timeline is open or layer is timeline driven
+    // Check if we are currently editing a Pose node in the State Machine:
+    const currentSM = state.project.stateMachines?.find(s => s.id === state.project.activeStateMachineId) || state.project.stateMachines?.[0];
+    const activePoseNodeId = state.ui.activeStateNodeId || state.ui.selectedGraphNodeId;
+    const activePoseNode = currentSM?.nodes.find(n => n.id === activePoseNodeId && n.type === 'pose');
+    const isPoseEditing = !!activePoseNode || (layerId && state.project.layers.find(l => l.id === layerId)?.driverMode === 'pose');
+
+    // Also update in Timeline track if timeline is open or layer is timeline driven (and not in pose mode)
     let updatedLayers = state.project.layers;
     let updatedAnimations = state.project.animations;
-    const isTimelineMode = state.ui.isTimelineOpen || (layerId && state.project.layers.find(l => l.id === layerId)?.driverMode === 'timeline');
+    const isTimelineMode = !isPoseEditing && (state.ui.isTimelineOpen || (layerId && state.project.layers.find(l => l.id === layerId)?.driverMode === 'timeline'));
     let newTimelineKfId = state.ui.selectedTimelineKeyframeId;
 
     if (isTimelineMode && updatedAnimations && updatedAnimations.length > 0) {
@@ -2731,6 +2811,50 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
+    // Auto-sync into active Pose Node!
+    let updatedStateMachines = state.project.stateMachines;
+    if (activePoseNode && updatedStateMachines) {
+      updatedStateMachines = updatedStateMachines.map(sm => {
+        if (sm.id !== currentSM?.id) return sm;
+        const updatedNodes = sm.nodes.map(n => {
+          if (n.id !== activePoseNode.id) return n;
+          const currentLs = n.poseData?.layerStates || [];
+          const existingLsIdx = currentLs.findIndex(ls => ls.layerId === layerId);
+          let newLs: LayerState[];
+          if (existingLsIdx >= 0) {
+            newLs = currentLs.map((ls, idx) => {
+              if (idx !== existingLsIdx) return ls;
+              const strokes = ls.strokes.map(s => s.id === strokeId ? {
+                ...s,
+                points: newPoints,
+                shapeConfig: shapeConfig !== undefined ? shapeConfig : s.shapeConfig
+              } : s);
+              return { ...ls, strokes };
+            });
+          } else {
+            newLs = [...currentLs, {
+              layerId,
+              strokes: [{
+                id: strokeId,
+                points: newPoints,
+                closed: baseStroke?.closed ?? false,
+                style: baseStroke?.style,
+                shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+              }]
+            }];
+          }
+          return {
+            ...n,
+            poseData: {
+              ...(n.poseData || {}),
+              layerStates: newLs
+            }
+          };
+        });
+        return { ...sm, nodes: updatedNodes };
+      });
+    }
+
     const targetLayer = state.project.layers.find(l => l.id === layerId);
     if (targetLayer?.isGuide) {
       updatedLayers = state.project.layers.map(l => {
@@ -2745,7 +2869,13 @@ export const useStore = create<StoreState>((set, get) => ({
     }
 
     return { 
-      project: { ...state.project, layers: updatedLayers, keyframes, animations: updatedAnimations },
+      project: {
+        ...state.project,
+        layers: updatedLayers,
+        keyframes,
+        animations: updatedAnimations,
+        stateMachines: updatedStateMachines
+      },
       ui: { ...state.ui, ...(newTimelineKfId ? { selectedTimelineKeyframeId: newTimelineKfId } : {}) }
     };
   }),
@@ -3845,6 +3975,454 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setEditingColliderInteractionId: (interactionId: string | null) => set((state) => ({
     ui: { ...state.ui, editingColliderInteractionId: interactionId }
+  })),
+
+  // --- Visual State Machine Graph Implementations ---
+  ensureStateMachine: () => {
+    const state = get();
+    if (state.project.stateMachines && state.project.stateMachines.length > 0) {
+      const sm = state.project.stateMachines.find(s => s.id === state.project.activeStateMachineId) || state.project.stateMachines[0];
+      return sm;
+    }
+    const defaultSm = getOrCreateDefaultStateMachine(state.project);
+    set((s) => ({
+      project: {
+        ...s.project,
+        stateMachines: [defaultSm],
+        activeStateMachineId: defaultSm.id
+      }
+    }));
+    return defaultSm;
+  },
+
+  addStateNode: (nodeData) => {
+    const id = `node-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const newNode: StateNode = { ...nodeData, id };
+    set((state) => {
+      const smList = state.project.stateMachines && state.project.stateMachines.length > 0 
+        ? [...state.project.stateMachines] 
+        : [getOrCreateDefaultStateMachine(state.project)];
+      const activeSmId = state.project.activeStateMachineId || smList[0].id;
+
+      const updatedList = smList.map(sm => {
+        if (sm.id !== activeSmId) return sm;
+        return {
+          ...sm,
+          nodes: [...sm.nodes, newNode]
+        };
+      });
+
+      return {
+        project: {
+          ...state.project,
+          stateMachines: updatedList,
+          activeStateMachineId: activeSmId
+        },
+        ui: {
+          ...state.ui,
+          selectedGraphNodeId: id
+        }
+      };
+    });
+    return id;
+  },
+
+  updateStateNode: (nodeId, updates) => set((state) => {
+    const smList = state.project.stateMachines || [];
+    const activeSmId = state.project.activeStateMachineId || smList[0]?.id;
+    if (!activeSmId) return {};
+
+    const updatedList = smList.map(sm => {
+      if (sm.id !== activeSmId) return sm;
+      return {
+        ...sm,
+        nodes: sm.nodes.map(n => n.id === nodeId ? { ...n, ...updates } : n)
+      };
+    });
+
+    return {
+      project: { ...state.project, stateMachines: updatedList }
+    };
+  }),
+
+  deleteStateNode: (nodeId) => set((state) => {
+    const smList = state.project.stateMachines || [];
+    const activeSmId = state.project.activeStateMachineId || smList[0]?.id;
+    if (!activeSmId) return {};
+
+    const updatedList = smList.map(sm => {
+      if (sm.id !== activeSmId) return sm;
+      // Do not delete entry node if it's the only one
+      if (sm.entryNodeId === nodeId) return sm;
+      return {
+        ...sm,
+        nodes: sm.nodes.filter(n => n.id !== nodeId),
+        transitions: sm.transitions.filter(t => t.fromNodeId !== nodeId && t.toNodeId !== nodeId)
+      };
+    });
+
+    return {
+      project: { ...state.project, stateMachines: updatedList },
+      ui: {
+        ...state.ui,
+        selectedGraphNodeId: state.ui.selectedGraphNodeId === nodeId ? null : state.ui.selectedGraphNodeId
+      }
+    };
+  }),
+
+  addStateTransition: (transitionData) => {
+    const id = `trans-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const newTrans: StateTransition = { ...transitionData, id };
+
+    set((state) => {
+      const smList = state.project.stateMachines && state.project.stateMachines.length > 0
+        ? [...state.project.stateMachines]
+        : [getOrCreateDefaultStateMachine(state.project)];
+      const activeSmId = state.project.activeStateMachineId || smList[0].id;
+
+      const updatedList = smList.map(sm => {
+        if (sm.id !== activeSmId) return sm;
+        // Avoid exact duplicate transitions
+        const exists = sm.transitions.some(t => t.fromNodeId === newTrans.fromNodeId && t.toNodeId === newTrans.toNodeId && t.trigger === newTrans.trigger);
+        if (exists) return sm;
+        return {
+          ...sm,
+          transitions: [...sm.transitions, newTrans]
+        };
+      });
+
+      return {
+        project: {
+          ...state.project,
+          stateMachines: updatedList,
+          activeStateMachineId: activeSmId
+        },
+        ui: {
+          ...state.ui,
+          selectedGraphTransitionId: id
+        }
+      };
+    });
+    return id;
+  },
+
+  updateStateTransition: (transitionId, updates) => set((state) => {
+    const smList = state.project.stateMachines || [];
+    const activeSmId = state.project.activeStateMachineId || smList[0]?.id;
+    if (!activeSmId) return {};
+
+    const updatedList = smList.map(sm => {
+      if (sm.id !== activeSmId) return sm;
+      return {
+        ...sm,
+        transitions: sm.transitions.map(t => t.id === transitionId ? { ...t, ...updates } : t)
+      };
+    });
+
+    return {
+      project: { ...state.project, stateMachines: updatedList }
+    };
+  }),
+
+  deleteStateTransition: (transitionId) => set((state) => {
+    const smList = state.project.stateMachines || [];
+    const activeSmId = state.project.activeStateMachineId || smList[0]?.id;
+    if (!activeSmId) return {};
+
+    const updatedList = smList.map(sm => {
+      if (sm.id !== activeSmId) return sm;
+      return {
+        ...sm,
+        transitions: sm.transitions.filter(t => t.id !== transitionId)
+      };
+    });
+
+    return {
+      project: { ...state.project, stateMachines: updatedList },
+      ui: {
+        ...state.ui,
+        selectedGraphTransitionId: state.ui.selectedGraphTransitionId === transitionId ? null : state.ui.selectedGraphTransitionId
+      }
+    };
+  }),
+
+  captureCurrentPoseToStateNode: (nodeId) => {
+    const state = get();
+    const targetKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+    const activeAnim = state.project.animations?.find(a => a.id === state.ui.activeAnimationId);
+
+    const snapshotStates: LayerState[] = state.project.layers.map(layer => {
+      let activeStrokes: Stroke[] = [];
+      if (activeAnim) {
+        const track = activeAnim.tracks?.find(t => t.layerId === layer.id);
+        if (track && track.keyframes.length > 0) {
+          const playhead = state.ui.timelineCurrentTime || 0;
+          const closestKf = track.keyframes.reduce((prev, curr) => 
+            Math.abs(curr.time - playhead) < Math.abs(prev.time - playhead) ? curr : prev
+          , track.keyframes[0]);
+          if (closestKf && closestKf.strokes) {
+            activeStrokes = closestKf.strokes;
+          }
+        }
+      }
+      if (activeStrokes.length === 0) {
+        const kfLs = targetKf?.layerStates.find(ls => ls.layerId === layer.id);
+        if (kfLs?.strokes) {
+          activeStrokes = kfLs.strokes;
+        }
+      }
+      return {
+        layerId: layer.id,
+        strokes: JSON.parse(JSON.stringify(activeStrokes))
+      };
+    });
+
+    get().updateStateNode(nodeId, {
+      poseData: {
+        keyframeId: targetKf?.id,
+        layerStates: snapshotStates,
+        axisValues: targetKf?.axisValues ? { ...targetKf.axisValues } : { 'axis-x': 0.5, 'axis-y': 0.5 }
+      }
+    });
+  },
+
+  applyPoseStateNodeToCanvas: (nodeId: string) => set((state) => {
+    const sm = state.project.stateMachines?.find(s => s.id === state.project.activeStateMachineId) || state.project.stateMachines?.[0];
+    const node = sm?.nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'pose' || !node.poseData?.layerStates) return state;
+
+    const targetKfId = state.ui.selectedKeyframeId || state.project.keyframes[0]?.id;
+    if (!targetKfId) return state;
+
+    const updatedKeyframes = state.project.keyframes.map(kf => {
+      if (kf.id !== targetKfId) return kf;
+      const updatedLs = kf.layerStates.map(ls => {
+        const poseLs = node.poseData?.layerStates.find(s => s.layerId === ls.layerId);
+        return poseLs ? { ...ls, strokes: JSON.parse(JSON.stringify(poseLs.strokes)) } : ls;
+      });
+      return { ...kf, layerStates: updatedLs };
+    });
+
+    return {
+      project: { ...state.project, keyframes: updatedKeyframes },
+      ui: { ...state.ui, activeStateNodeId: nodeId }
+    };
+  }),
+
+  createPoseStateNodeFromCurrent: (name, x = 320, y = 200) => {
+    const state = get();
+    const targetKf = state.project.keyframes.find(k => k.id === state.ui.selectedKeyframeId) || state.project.keyframes[0];
+    const activeAnim = state.project.animations?.find(a => a.id === state.ui.activeAnimationId);
+
+    const snapshotStates: LayerState[] = state.project.layers.map(layer => {
+      let activeStrokes: Stroke[] = [];
+      if (activeAnim) {
+        const track = activeAnim.tracks?.find(t => t.layerId === layer.id);
+        if (track && track.keyframes.length > 0) {
+          const playhead = state.ui.timelineCurrentTime || 0;
+          const closestKf = track.keyframes.reduce((prev, curr) => 
+            Math.abs(curr.time - playhead) < Math.abs(prev.time - playhead) ? curr : prev
+          , track.keyframes[0]);
+          if (closestKf && closestKf.strokes) {
+            activeStrokes = closestKf.strokes;
+          }
+        }
+      }
+      if (activeStrokes.length === 0) {
+        const kfLs = targetKf?.layerStates.find(ls => ls.layerId === layer.id);
+        if (kfLs?.strokes) {
+          activeStrokes = kfLs.strokes;
+        }
+      }
+      return {
+        layerId: layer.id,
+        strokes: JSON.parse(JSON.stringify(activeStrokes))
+      };
+    });
+
+    const nodeId = get().addStateNode({
+      name: name || `Pose ${((state.project.stateMachines?.[0]?.nodes.length || 0) + 1)}`,
+      type: 'pose',
+      x,
+      y,
+      poseData: {
+        keyframeId: targetKf?.id,
+        layerStates: snapshotStates,
+        axisValues: targetKf?.axisValues ? { ...targetKf.axisValues } : { 'axis-x': 0.5, 'axis-y': 0.5 }
+      },
+      color: '#3B82F6'
+    });
+
+    return nodeId;
+  },
+
+  createClipStateNode: (animationId, x = 360, y = 200) => {
+    const state = get();
+    const anim = state.project.animations?.find(a => a.id === animationId);
+    const nodeId = get().addStateNode({
+      name: anim?.name || 'Clip Animation',
+      type: 'clip',
+      x,
+      y,
+      animationId,
+      color: '#8B5CF6'
+    });
+    return nodeId;
+  },
+
+  setGraphWindowPosition: (position) => set((state) => ({
+    ui: { ...state.ui, graphWindowPosition: position }
+  })),
+
+  setGraphWindowSize: (size) => set((state) => ({
+    ui: { ...state.ui, graphWindowSize: size }
+  })),
+
+  setGraphWindowMaximized: (maximized) => set((state) => ({
+    ui: { ...state.ui, graphWindowMaximized: maximized }
+  })),
+
+  setSelectedGraphNode: (nodeId) => set((state) => {
+    if (!nodeId) {
+      return {
+        ui: { ...state.ui, selectedGraphNodeId: null, selectedGraphTransitionId: null }
+      };
+    }
+    const sm = state.project.stateMachines?.find(s => s.id === state.project.activeStateMachineId) || state.project.stateMachines?.[0];
+    const node = sm?.nodes.find(n => n.id === nodeId);
+
+    let nextSelectedLayerId = state.ui.selectedLayerId;
+    let nextIsTimelineOpen = state.ui.isTimelineOpen;
+    let updatedKeyframes = state.project.keyframes;
+    let updatedStateMachines = state.project.stateMachines;
+
+    if (node && node.type === 'pose') {
+      // Auto-select corresponding layer if configured
+      if (node.targetLayerId && node.targetLayerId !== 'all') {
+        const layerExists = state.project.layers.some(l => l.id === node.targetLayerId);
+        if (layerExists) {
+          nextSelectedLayerId = node.targetLayerId;
+        }
+      } else if (state.ui.selectedLayerId) {
+        // Associate current layer if node has no layer set
+        updatedStateMachines = state.project.stateMachines?.map(s => {
+          if (s.id !== sm?.id) return s;
+          return {
+            ...s,
+            nodes: s.nodes.map(n => n.id === nodeId ? { ...n, targetLayerId: state.ui.selectedLayerId } : n)
+          };
+        });
+      }
+
+      // Close timeline to keep canvas focused purely on pose editing
+      nextIsTimelineOpen = false;
+
+      // Automatically apply pose strokes to current canvas keyframe
+      if (node.poseData?.layerStates && node.poseData.layerStates.length > 0) {
+        const targetKfId = state.ui.selectedKeyframeId || state.project.keyframes[0]?.id;
+        if (targetKfId) {
+          updatedKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== targetKfId) return kf;
+            const updatedLs = kf.layerStates.map(ls => {
+              const poseLs = node.poseData?.layerStates.find(s => s.layerId === ls.layerId);
+              return poseLs ? { ...ls, strokes: JSON.parse(JSON.stringify(poseLs.strokes)) } : ls;
+            });
+            // Add any layers from pose not yet present
+            node.poseData?.layerStates.forEach(pls => {
+              if (!updatedLs.some(ls => ls.layerId === pls.layerId)) {
+                updatedLs.push({ layerId: pls.layerId, strokes: JSON.parse(JSON.stringify(pls.strokes)) });
+              }
+            });
+            return { ...kf, layerStates: updatedLs };
+          });
+        }
+      }
+    }
+
+    return {
+      project: {
+        ...state.project,
+        keyframes: updatedKeyframes,
+        stateMachines: updatedStateMachines
+      },
+      ui: {
+        ...state.ui,
+        selectedGraphNodeId: nodeId,
+        selectedGraphTransitionId: null,
+        selectedLayerId: nextSelectedLayerId,
+        isTimelineOpen: nextIsTimelineOpen
+      }
+    };
+  }),
+
+  setSelectedGraphTransition: (transitionId) => set((state) => ({
+    ui: { ...state.ui, selectedGraphTransitionId: transitionId, selectedGraphNodeId: null }
+  })),
+
+  setActiveStateNode: (nodeId) => set((state) => {
+    if (!nodeId) return { ui: { ...state.ui, activeStateNodeId: null } };
+    const sm = state.project.stateMachines?.find(s => s.id === state.project.activeStateMachineId) || state.project.stateMachines?.[0];
+    const node = sm?.nodes.find(n => n.id === nodeId);
+    if (!node) return { ui: { ...state.ui, activeStateNodeId: nodeId } };
+
+    if (node.type === 'clip' && node.animationId) {
+      return {
+        ui: {
+          ...state.ui,
+          activeStateNodeId: nodeId,
+          activeAnimationId: node.animationId,
+          timelineCurrentTime: 0
+        }
+      };
+    }
+
+    if (node.type === 'pose') {
+      let nextSelectedLayerId = state.ui.selectedLayerId;
+      if (node.targetLayerId && node.targetLayerId !== 'all') {
+        const layerExists = state.project.layers.some(l => l.id === node.targetLayerId);
+        if (layerExists) nextSelectedLayerId = node.targetLayerId;
+      }
+
+      let updatedKeyframes = state.project.keyframes;
+      if (node.poseData?.layerStates && node.poseData.layerStates.length > 0) {
+        const targetKfId = state.ui.selectedKeyframeId || state.project.keyframes[0]?.id;
+        if (targetKfId) {
+          updatedKeyframes = state.project.keyframes.map(kf => {
+            if (kf.id !== targetKfId) return kf;
+            const updatedLs = kf.layerStates.map(ls => {
+              const poseLs = node.poseData?.layerStates.find(s => s.layerId === ls.layerId);
+              return poseLs ? { ...ls, strokes: JSON.parse(JSON.stringify(poseLs.strokes)) } : ls;
+            });
+            node.poseData?.layerStates.forEach(pls => {
+              if (!updatedLs.some(ls => ls.layerId === pls.layerId)) {
+                updatedLs.push({ layerId: pls.layerId, strokes: JSON.parse(JSON.stringify(pls.strokes)) });
+              }
+            });
+            return { ...kf, layerStates: updatedLs };
+          });
+        }
+      }
+
+      return {
+        project: {
+          ...state.project,
+          keyframes: updatedKeyframes
+        },
+        ui: {
+          ...state.ui,
+          activeStateNodeId: nodeId,
+          selectedLayerId: nextSelectedLayerId,
+          isTimelineOpen: false,
+          isMatrixOpen: false
+        }
+      };
+    }
+
+    return { ui: { ...state.ui, activeStateNodeId: nodeId } };
+  }),
+
+  setRuntimeScrollProgress: (progress) => set((state) => ({
+    ui: { ...state.ui, runtimeScrollProgress: Math.max(0, Math.min(1, progress)) }
   }))
 
 }));

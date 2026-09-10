@@ -259,7 +259,8 @@ const calculateBilinearGridWeights = (
   currentAxes: Record<string, number>,
   keyframes: { id: string; axisValues: Record<string, number> }[],
   allowExtrapolation: boolean = false,
-  extrapolationFactor: number = 0.2
+  extrapolationFactor: number = 0.2,
+  gridCurvature: number = 1.0
 ) => {
   const weights: Record<string, number> = {};
   
@@ -311,7 +312,14 @@ const calculateBilinearGridWeights = (
       for (let i = 0; i < grid.length - 1; i++) {
           if (val >= grid[i] && val <= grid[i+1]) {
               const span = grid[i+1] - grid[i];
-              return { lower: grid[i], upper: grid[i+1], t: span === 0 ? 0 : (val - grid[i]) / span };
+              const rawT = span === 0 ? 0 : (val - grid[i]) / span;
+              let t = rawT;
+              if (gridCurvature > 0 && rawT >= 0 && rawT <= 1) {
+                  // Smoothstep C1 blending: 3*t^2 - 2*t^3
+                  const smoothT = rawT * rawT * (3 - 2 * rawT);
+                  t = rawT * (1 - gridCurvature) + smoothT * gridCurvature;
+              }
+              return { lower: grid[i], upper: grid[i+1], t };
           }
       }
       return { lower: grid[0], upper: grid[0], t: 0 };
@@ -535,7 +543,13 @@ export const interpolateStrokePoints = (
   }
 
   let ACTUAL_TARGET_COUNT = targetCount; 
-  const maxPts = Math.max(...activeKeyframes.map(k => k.points!.length));
+  // Stability Fix: Calculate maxPts across all available keyframes (even those with weight 0) 
+  // to prevent the target point count from changing dynamically when a keyframe is excluded 
+  // due to weight thresholding. This keeps the topology size perfectly stable and prevents vertex inertia snaps.
+  const allStrokesWithPoints = keyframesData.filter(k => k.points && k.points.length > 0);
+  const maxPts = allStrokesWithPoints.length > 0 
+    ? Math.max(...allStrokesWithPoints.map(k => k.points!.length))
+    : (activeKeyframes.length > 0 ? Math.max(...activeKeyframes.map(k => k.points!.length)) : 0);
 
   if (mode === 'points' || mode === 'spline' || mode === 'length') {
       ACTUAL_TARGET_COUNT = maxPts;

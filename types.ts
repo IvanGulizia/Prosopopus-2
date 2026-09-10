@@ -60,7 +60,7 @@ export interface Stroke {
 // --- Layers ---
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference' | 'exclusion';
 export type InterpolationMode = 'resample' | 'points' | 'spline' | 'length';
-export type LayerDriverMode = 'matrix' | 'timeline';
+export type LayerDriverMode = 'matrix' | 'timeline' | 'pose';
 
 export interface LayerSymmetryConfig {
   enabled: boolean;
@@ -200,6 +200,72 @@ export interface LayerInteraction {
   enabled?: boolean;
 }
 
+// --- State Machine Graph System (Rive / Unity Animator Style) ---
+export type StateNodeType = 'entry' | 'pose' | 'clip' | 'any';
+
+export interface StateNode {
+  id: string;
+  name: string;
+  type: StateNodeType;
+  x: number;
+  y: number;
+  // For 'clip' nodes: points to an AnimationTimeline
+  animationId?: string;
+  // Target Layer: 'all' or specific layerId for multi-layer independent control
+  targetLayerId?: string;
+  // For 'pose' nodes: static snapshot of layer shapes / keyframe
+  poseData?: {
+    keyframeId?: string; // Optional link to a matrix keyframe
+    layerStates?: LayerState[]; // Snapshot of strokes for each layer
+    axisValues?: Record<string, number>;
+  };
+  color?: string; // Custom badge/header color
+}
+
+export type StateTransitionTrigger = 
+  | 'click'            // Clic sur calque ou canvas
+  | 'double_click'     // Double-clic
+  | 'pointer_down'     // Appui de souris / toucher
+  | 'pointer_up'       // Relâchement
+  | 'hover_enter'      // Survol entrant
+  | 'hover_leave'      // Survol sortant
+  | 'scroll_down'      // Molette vers le bas
+  | 'scroll_up'        // Molette vers le haut
+  | 'scroll_progress'  // Progression du scroll atteignant un seuil (ex: >= 50%)
+  | 'scroll_scrub'     // Pilotage continu direct par le scroll (0.0 -> 1.0)
+  | 'animation_end'    // Fin d'animation du clip source
+  | 'delay'            // Après un délai (en secondes)
+  | 'key_press';       // Touche de clavier pressée
+
+export interface StateTransitionTriggerParams {
+  targetType?: 'canvas' | 'layer' | 'collider';
+  layerId?: string;          // 'canvas' or specific layerId
+  collider?: InteractionCollider; // Custom hitbox definition (rect, circle, layer)
+  scrollThreshold?: number;  // 0.0 to 1.0 (for 'scroll_progress')
+  scrollRange?: [number, number]; // [start, end] for 'scroll_scrub'
+  delaySeconds?: number;     // for 'delay' (e.g. 1.5s)
+  key?: string;              // 'Space', 'ArrowRight', 'Enter', etc.
+}
+
+export interface StateTransition {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  trigger: StateTransitionTrigger;
+  params?: StateTransitionTriggerParams;
+  duration: number; // Duration of crossfade / morphing transition in seconds (e.g. 0.35s)
+  easing: EasingType;
+  name?: string;
+}
+
+export interface StateMachine {
+  id: string;
+  name: string;
+  nodes: StateNode[];
+  transitions: StateTransition[];
+  entryNodeId: string;
+}
+
 // --- Project Structure ---
 export interface Project {
   id: string;
@@ -213,6 +279,8 @@ export interface Project {
   keyframes: Keyframe[];
   animations?: AnimationTimeline[]; // Stored animation timelines
   interactions?: LayerInteraction[]; // Stored interactive state triggers
+  stateMachines?: StateMachine[]; // Visual State Machine graphs
+  activeStateMachineId?: string | null; // Selected State Machine
   activeAnimationId?: string | null; // Default or active timeline
   settings?: Partial<UIState>; // Store relevant UI settings
 }
@@ -273,6 +341,15 @@ export interface UIState {
   selectedTimelineKeyframeId: string | null; // Selected temporal keyframe on a layer track
   editingColliderInteractionId: string | null; // Interaction ID currently being edited via canvas collider box
   
+  // State Machine Graph Window State
+  graphWindowPosition: { x: number; y: number };
+  graphWindowSize: { width: number; height: number };
+  graphWindowMaximized?: boolean;
+  selectedGraphNodeId: string | null;
+  selectedGraphTransitionId: string | null;
+  activeStateNodeId: string | null; // Active runtime node
+  runtimeScrollProgress: number; // 0.0 to 1.0 (driven by scroll/wheel or simulator)
+  
   // Theme
   theme: Theme;
   
@@ -295,6 +372,7 @@ export interface UIState {
   // Math Helpers
   interpolationStrategy: InterpolationStrategy; // New
   interpolationExponent: number; // Controls the "falloff" for IDW mode
+  gridCurvature: number; // 0 to 1 (0 = Linear C0, 1 = Smoothstep C1, default 1.0)
   
   // PHYSICS (Spring System & Overshoot)
   playModePhysics: boolean; // Enable physics in Play Mode
@@ -321,6 +399,7 @@ export interface UIState {
   overshootVertexInertiaFactor: number; // Tension / Reactivity (0.1 to 3.0)
   overshootVertexDamping: number;       // Friction / Damping (0.05 to 1.5)
   overshootVertexMass: number;          // Vertex Weight / Mass Lag (0.2 to 2.5)
+  overshootVertexSnapProtection: number; // 0 to 1 (Anti-Snap / Whipping Protection, default 0.75)
 
   // Approche C : Keyframe Exaggeration / Overdrive Slider
   overshootExaggerationEnabled: boolean;

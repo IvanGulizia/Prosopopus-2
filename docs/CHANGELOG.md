@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.3.1] - Raffinement UX du Graph Nodal, Connexions Magnétiques & Colliders Directs
+
+### Added
+- **Gestion des Colliders dans l'Inspecteur de Transition** :
+  - Sélecteur 3 options de zone de détection : Canvas entier, Calque vectoriel, ou Zone de Collider personnalisée (Rectangle / Cercle).
+  - Contrôle précis des coordonnées (X, Y, Largeur, Hauteur ou Rayon) dans l'inspecteur.
+  - Affichage visuel en direct du rectangle/cercle de détection en pointillés indigo sur le canvas en mode Édition.
+  - Possibilité de déplacer le collider directement à la souris sur le canvas pour un positionnement intuitif.
+- **Suppression Clavier Rapide (`Delete` / `Backspace`)** :
+  - Raccourci clavier global permettant de supprimer immédiatement la transition ou le nœud sélectionné dans le graph sans devoir passer par les menus.
+- **Activation Directe par Double-Clic** :
+  - Double-cliquer sur n'importe quel nœud d'état active directement cet état sur le canvas.
+- **Connexion Magnétique Tolérante** :
+  - Il n'est plus nécessaire de viser précisément la petite pastille d'entrée : relâcher le câble n'importe où au-dessus du nœud cible établit automatiquement la transition.
+  - Retour visuel immédiat (surbrillance bleue/indigo) sur les nœuds cibles pendant le tirage du câble.
+
+### Fixed
+- **Routage Intelligent des Câbles (Aller-Retour)** :
+  - Algorithme de routage évitant le croisement des câbles avec les nœuds lors de connexions bidirectionnelles (courbure supérieure pour l'aller, courbure inférieure et points de contrôle inversés pour le retour).
+  - Placement des câbles SVG en arrière-plan structurel (`z-0`) pour garantir qu'ils ne se superposent jamais aux cartes des nœuds (`z-10`).
+- **Suppression du Tremblement des Badges de Transition** :
+  - Élimination des micro-oscillations (`hover:scale`) sur les badges SVG grâce à une boîte de collision invisible et des transformations stables.
+- **Suivi Instantané des Câbles lors du Déplacement** :
+  - Retrait des délais de transition CSS sur les courbes de Bézier pour un suivi synchrone à 60 FPS sans latence lors du drag & drop d'un nœud.
+
+## [2.3.0] - Éditeur de Graph Nodal pour la Machine d'États (Inspiration Rive & Unity Animator)
+
+### Added
+- **Fenêtre Flottante de Graph Nodal (`StateMachineGraph.tsx`)** :
+  - Fenêtre modale flottante, déplaçable (drag & drop via header) et redimensionnable (poignée de resize en bas à droite).
+  - Canvas nodal infini avec navigation pan & zoom et grille matricielle discrète.
+  - Rendu des câbles de transition en courbes de Bézier SVG élégantes avec flèches directionnelles et badges d'événement interactifs.
+  - Inspecteur latéral contextuel pour configurer les propriétés de chaque nœud et transition.
+- **Modèle de Nœuds et Transitions d'États** :
+  - Nœuds de type **Pose** (pose statique ou morphing direct avec une seule clé) et **Clip** (animation temporelle complète).
+  - Nœud d'entrée (**Entry Node**) avec surbrillance distinctive violette.
+  - Déclencheurs étendus : `click`, `double_click`, `pointer_down`, `pointer_up`, `hover_enter`, `hover_leave`, `scroll_down`, `scroll_up`, `scroll_scrub`, `key_press`, `delay`, `animation_end`.
+  - Contrôle continu par le défilement (**Scroll**) : pilotage direct de l'animation ou du morphing via la molette ou un simulateur de scroll interactif.
+  - Sélecteur de courbe d'easing et durée personnalisables pour chaque transition.
+- **Moteur d'Exécution Runtime dans `Canvas.tsx`** :
+  - Évaluation dynamique des transitions en mode Play : déclenchement par clic, survol de calques spécifiques, frappe clavier ou molette de défilement.
+  - Morphing vectoriel fluide direct entre les poses (`interpolateStrokesDirect`).
+  - Défilement continu interactif (Scrubbing) pour jouer des clips ou interpoler des poses en temps réel via le scroll.
+  - Rétrocompatibilité totale préservant les animations existantes et la matrice 2D.
+
 ## [2.2.1] - Isolation stricte de la Sélection & Correction de la Suppression Timeline
 
 ### Fixed

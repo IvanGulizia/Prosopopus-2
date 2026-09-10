@@ -133,7 +133,7 @@ export const INITIAL_UI_STATE: UIState = {
   isDebugMenuOpen: false,
 
   // Mode Expert & Timelines
-  expertModeEnabled: true,
+  expertModeEnabled: false,
   isTimelineOpen: false, // Starts closed (showing Matrix), can be opened via Toolbar or switched
   autoKeyframeEnabled: true, // Default ON: drawing auto-creates/updates keyframe at timeline playhead
   isInteractionsOpen: false,
@@ -144,6 +144,15 @@ export const INITIAL_UI_STATE: UIState = {
   selectedLayerTrackId: null,
   selectedTimelineKeyframeId: null,
   editingColliderInteractionId: null,
+  
+  // State Machine Graph Window State
+  graphWindowPosition: { x: 260, y: 90 },
+  graphWindowSize: { width: 780, height: 490 },
+  graphWindowMaximized: false,
+  selectedGraphNodeId: null,
+  selectedGraphTransitionId: null,
+  activeStateNodeId: null,
+  runtimeScrollProgress: 0,
 
   theme: INITIAL_THEME,
   
@@ -163,6 +172,7 @@ export const INITIAL_UI_STATE: UIState = {
   
   interpolationStrategy: 'bilinear-grid', // UPDATED TO GRID LOGIC
   interpolationExponent: 2.0, // Default for IDW mode if switched
+  gridCurvature: 1.0, // 0 = Linear C0, 1 = Smoothstep C1
   
   playModePhysics: true, // DEFAULT ENABLED
   springStiffness: 220, // Updated default: 220
@@ -177,12 +187,13 @@ export const INITIAL_UI_STATE: UIState = {
   overshootMomentumFactor: 0.4,
 
   // Geometric Overshoot initial defaults
-  overshootExtrapolationEnabled: true, // A. Geometric extrapolation enabled by default
+  overshootExtrapolationEnabled: false, // A. Geometric extrapolation enabled by default
   overshootExtrapolationFactor: 0.2,   // 20%
   overshootVertexInertiaEnabled: true, // B. Vertex Inertia enabled by default
   overshootVertexInertiaFactor: 2.5,  // Stiffness / Tension (default x2.50)
   overshootVertexDamping: 0.5,        // Damping / Friction (default x0.50 as requested)
   overshootVertexMass: 2.0,           // Mass / Weight Lag (default x2.00)
+  overshootVertexSnapProtection: 0.75, // Anti-Snap / Whipping Protection (default 75%)
   overshootExaggerationEnabled: false,
   overshootExaggerationFactor: 1.25,
 
