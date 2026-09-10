@@ -30,6 +30,44 @@ export const resolveLayerVisibleStrokes = (proj: Project, u: UIState, layerId: s
   if (!layer || !layer.visible) return [];
 
   if (layer.isGuide) {
+    const layerRelevantKeyframes = proj.keyframes.filter(kf => {
+      const ls = kf.layerStates.find(s => s.layerId === layer.id);
+      return ls && ls.strokes.length > 0;
+    });
+
+    if (u.mode === 'play' && layerRelevantKeyframes.length > 0) {
+      // Find the currently active state in play mode based on global currentAxesDict
+      // This is a helper inside the getCurrentLayerStrokes hook.
+      // `proj.axes` holds the values. But we don't have access to the physics-smoothed playMode axes here easily,
+      // so we use the raw proj.axes for the thumbnail extraction in the layers panel.
+      const currentAxesDict: Record<string, number> = {};
+      proj.axes.forEach(a => { currentAxesDict[a.id] = a.currentValue; });
+      const weights = calculateInterpolationWeights(
+        currentAxesDict,
+        layerRelevantKeyframes,
+        u.interpolationExponent,
+        u.interpolationStrategy,
+        false,
+        0,
+        u.gridCurvature ?? 1.0
+      );
+      let maxWeight = -Infinity;
+      let nearestKfId = '';
+      for (const [kfId, weight] of Object.entries(weights)) {
+        if (weight > maxWeight) {
+          maxWeight = weight;
+          nearestKfId = kfId;
+        }
+      }
+      const nearestKf = layerRelevantKeyframes.find(k => k.id === nearestKfId);
+      const kfStrokes = nearestKf?.layerStates.find(ls => ls.layerId === layer.id)?.strokes;
+      if (kfStrokes && kfStrokes.length > 0) return kfStrokes;
+    } else {
+      const selectedKf = proj.keyframes.find(k => k.id === u.selectedKeyframeId) || proj.keyframes[0];
+      const kfStrokes = selectedKf?.layerStates.find(ls => ls.layerId === layer.id)?.strokes;
+      if (kfStrokes && kfStrokes.length > 0) return kfStrokes;
+    }
+
     return (layer.guideStrokes && layer.guideStrokes.length > 0)
       ? layer.guideStrokes
       : (proj.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
@@ -1938,21 +1976,175 @@ export const Canvas: React.FC = () => {
         }
 
         if (isLayerActive) {
-          if (isActivelyDrawingOnThisLayer) {
+          if (isActivelyDrawingOnThisLayer && !layer.isGuide) {
             // Dim existing stroke while redrawing new stroke over it
             layerGlobalAlpha *= (currentUI.redrawGhostOpacity ?? 0.25);
-          } else if (isCreatingNewState && currentUI.mode === 'edit') {
+          } else if (isCreatingNewState && currentUI.mode === 'edit' && !layer.isGuide) {
             layerGlobalAlpha *= (currentUI.ghostStrokeOpacity ?? 0.4);
           }
         }
 
-        if (layer.isGuide) {
-          // Guide / Reference Layer: render all its freehand strokes directly without state interpolation
-          const guideStrokes = (layer.guideStrokes && layer.guideStrokes.length > 0)
-            ? layer.guideStrokes
-            : (currentProject.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
+        const layerRelevantKeyframes = currentProject.keyframes.filter(kf => {
+            const ls = kf.layerStates.find(s => s.layerId === layer.id);
+            return ls && ls.strokes.length > 0;
+        });
 
-          guideStrokes.forEach(s => {
+        if (layer.isGuide) {
+          // Guide / Reference Layer rendering
+          
+          let strokesToRender: Stroke[] = [];
+
+          if (currentUI.mode === 'play' && layerRelevantKeyframes.length > 0) {
+            // PLAY MODE (Nearest State / Discrete Selection)
+            // No interpolation. Find the keyframe with the absolute highest weight based on matrix cursor position.
+            const weights = calculateInterpolationWeights(
+              currentAxesDict, 
+              layerRelevantKeyframes, 
+              currentUI.interpolationExponent, 
+              currentUI.interpolationStrategy,
+              false, // allowExtrapolation
+              0, // extrapolationFactor
+              currentUI.gridCurvature
+            );
+
+            let maxWeight = -Infinity;
+            let nearestKfId = '';
+            for (const [kfId, weight] of Object.entries(weights)) {
+               if (weight > maxWeight) {
+                   maxWeight = weight;
+                   nearestKfId = kfId;
+               }
+            }
+
+            const nearestKf = layerRelevantKeyframes.find(k => k.id === nearestKfId);
+            if (nearestKf) {
+                strokesToRender = nearestKf.layerStates.find(ls => ls.layerId === layer.id)?.strokes || [];
+            }
+          } else {
+            // EDIT MODE: show selected keyframe's guide state
+            const selectedKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId) || currentProject.keyframes[0];
+            const kfStrokes = selectedKf?.layerStates.find(ls => ls.layerId === layer.id)?.strokes;
+            strokesToRender = kfStrokes || [];
+            
+            // Legacy/fallback: only if NO keyframes contain ANY strokes for this guide layer
+            if (layerRelevantKeyframes.length === 0 && layer.guideStrokes) {
+               strokesToRender = layer.guideStrokes;
+            }
+          }
+
+          // Guide Onion Skin Rendering
+          let renderedKfId = currentUI.mode === 'play' ? null : currentUI.selectedKeyframeId;
+          if (currentUI.mode === 'play') {
+            // Find which one was actually used
+            const match = layerRelevantKeyframes.find(k => k.layerStates.find(ls => ls.layerId === layer.id)?.strokes === strokesToRender);
+            if (match) renderedKfId = match.id;
+          }
+
+          if (currentUI.guideOnionSkinEnabled && (currentUI.mode === 'edit' || currentUI.guideOnionSkinInPlayMode) && layerRelevantKeyframes.length > 0) {
+            const onionMode = currentUI.onionSkinMode || 'both';
+            
+            const activeKf = currentProject.keyframes.find(k => k.id === renderedKfId);
+            const axisXId = currentProject.axes[0]?.id;
+            const axisYId = currentProject.axes[1]?.id;
+
+            layerRelevantKeyframes.forEach(kf => {
+              if (kf.id === renderedKfId) return; // Skip the actively rendered one
+              
+              let alphaMultiplier = 1;
+              let tintColor: string | null = null;
+              
+              if (axisXId || axisYId) {
+                 const currX = axisXId ? ((currentUI.mode === 'play' ? currentAxesDict[axisXId] : activeKf?.axisValues[axisXId]) ?? 0) : 0;
+                 const currY = axisYId ? ((currentUI.mode === 'play' ? currentAxesDict[axisYId] : activeKf?.axisValues[axisYId]) ?? 0) : 0;
+                 
+                 const kfX = axisXId ? (kf.axisValues[axisXId] ?? 0) : 0;
+                 const kfY = axisYId ? (kf.axisValues[axisYId] ?? 0) : 0;
+                 
+                 const dx = kfX - currX;
+                 const dy = kfY - currY;
+                 
+                 if (currentUI.guideOnionDistanceOpacity) {
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const range = currentUI.guideOnionDistanceRange || 2.0;
+                    alphaMultiplier = Math.max(0, 1 - (dist / range));
+                 }
+                 
+                 if (currentUI.guideOnionDirectionalTint) {
+                    if (Math.abs(dx) > Math.abs(dy)) {
+                       tintColor = dx > 0 ? (currentUI.guideOnionColorRight || '#3b82f6') : (currentUI.guideOnionColorLeft || '#ef4444');
+                    } else if (Math.abs(dy) > Math.abs(dx)) {
+                       // Assuming matrix positive Y is typically mapped to 'Down' in user perception
+                       tintColor = dy > 0 ? (currentUI.guideOnionColorDown || '#f97316') : (currentUI.guideOnionColorUp || '#22c55e');
+                    } else {
+                       // Diagonal or same point?
+                       if (dx !== 0 || dy !== 0) {
+                           tintColor = dx > 0 ? (currentUI.guideOnionColorRight || '#3b82f6') : (currentUI.guideOnionColorLeft || '#ef4444');
+                       }
+                    }
+                 }
+              }
+              
+              if (alphaMultiplier <= 0) return;
+
+              const kfStrokes = kf.layerStates.find(ls => ls.layerId === layer.id)?.strokes || [];
+              kfStrokes.forEach(s => {
+                 if (!s.points || s.points.length === 0) return;
+                 const resolvedStyle = resolveStrokeStyle(s, layer);
+                 const rRoundness = resolvedStyle.cornerRoundness ?? 0;
+                 const rRadii = s.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                 const isRectangleShape = s.shapeConfig?.type === 'rectangle';
+                 const isSpline = layer.interpolationMode === 'spline';
+
+                 const renderPath = () => {
+                   if (isSpline) {
+                     drawCatmullRomSpline(ctx, s.points, 0.5);
+                   } else if (isRectangleShape && (rRadii || rRoundness > 0)) {
+                     drawRoundedRectangle(ctx, s.points, rRadii, rRoundness);
+                   } else {
+                     ctx.beginPath();
+                     if (rRoundness > 0) {
+                       drawCornerRoundedPath(ctx, s.points, rRoundness);
+                     } else {
+                       ctx.moveTo(s.points[0].x, s.points[0].y);
+                       for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+                     }
+                   }
+                 };
+
+                 // Translucent Styled representation
+                 if (onionMode === 'styled' || onionMode === 'both') {
+                   ctx.save();
+                   ctx.globalAlpha = (currentUI.onionSkinOpacity ?? 0.2) * (layer.opacity ?? 1) * alphaMultiplier;
+                   renderPath();
+                   if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
+                     ctx.fillStyle = tintColor || resolvedStyle.fillColor;
+                     ctx.fill();
+                   }
+                   if (resolvedStyle.strokeColor && resolvedStyle.strokeColor !== 'none') {
+                     ctx.lineCap = currentUI.strokeCap || 'round';
+                     ctx.lineJoin = 'round';
+                     ctx.strokeStyle = tintColor || resolvedStyle.strokeColor;
+                     ctx.lineWidth = resolvedStyle.strokeWidth;
+                     ctx.stroke();
+                   }
+                   ctx.restore();
+                 }
+
+                 // Wireframe representation
+                 if (onionMode === 'wireframe' || onionMode === 'both') {
+                   ctx.save();
+                   ctx.globalAlpha = Math.min(1.0, ((currentUI.onionSkinOpacity ?? 0.2) * 2.5 + 0.2)) * alphaMultiplier;
+                   renderPath();
+                   ctx.strokeStyle = tintColor || '#64748B';
+                   ctx.lineWidth = 1;
+                   ctx.stroke();
+                   ctx.restore();
+                 }
+              });
+            });
+          }
+
+          strokesToRender.forEach(s => {
             if (!s.points || s.points.length === 0) return;
             const resolvedStyle = resolveStrokeStyle(s, layer);
             let sFill = isInactiveWireframe ? 'none' : resolvedStyle.fillColor;
@@ -2171,11 +2363,6 @@ export const Canvas: React.FC = () => {
           }
         }
 
-        const layerRelevantKeyframes = currentProject.keyframes.filter(kf => {
-            const ls = kf.layerStates.find(s => s.layerId === layer.id);
-            return ls && ls.strokes.length > 0;
-        });
-
         if (layerRelevantKeyframes.length === 0) return;
 
         // In Edit Mode with a selected keyframe:
@@ -2257,6 +2444,7 @@ export const Canvas: React.FC = () => {
             } else {
                 const subSteps = 2;
                 const subDt = Math.min(dt, 0.05) / subSteps;
+                const snapProtection = currentUI.overshootVertexSnapProtection ?? 0.75;
 
                 for (let step = 0; step < subSteps; step++) {
                     for (let i = 0; i < interpolatedPoints.length; i++) {
@@ -2264,12 +2452,43 @@ export const Canvas: React.FC = () => {
                         const curPt = stored.current[i];
                         const vel = stored.velocity[i];
 
+                        const dx = targetPt.x - curPt.x;
+                        const dy = targetPt.y - curPt.y;
+                        const dist = Math.hypot(dx, dy);
+
+                        // Adaptive damping: when distant (high displacement), dynamically increase damping to avoid runaway oscillation/whipping
+                        const effectiveDamping = snapProtection > 0 
+                            ? damping * (1 + snapProtection * Math.min(3.0, dist / 80.0))
+                            : damping;
+
                         // Second-order Spring-Damper-Mass Force: F = k*(target - cur) - c*vel
-                        const springF_x = (targetPt.x - curPt.x) * stiffness - vel.x * damping;
-                        const springF_y = (targetPt.y - curPt.y) * stiffness - vel.y * damping;
+                        let springF_x = dx * stiffness - vel.x * effectiveDamping;
+                        let springF_y = dy * stiffness - vel.y * effectiveDamping;
+
+                        if (snapProtection > 0) {
+                            // Clamp max acceleration to prevent sudden explosive snaps
+                            const maxAcc = 20000 * (1 - snapProtection * 0.4);
+                            const currentAcc = Math.hypot(springF_x / mass, springF_y / mass);
+                            if (currentAcc > maxAcc) {
+                                const ratio = maxAcc / currentAcc;
+                                springF_x *= ratio;
+                                springF_y *= ratio;
+                            }
+                        }
 
                         vel.x += (springF_x / mass) * subDt;
                         vel.y += (springF_y / mass) * subDt;
+
+                        if (snapProtection > 0) {
+                            // Clamp max velocity to prevent vertex whipping
+                            const maxVel = 2500 * (1 - snapProtection * 0.35);
+                            const currentVel = Math.hypot(vel.x, vel.y);
+                            if (currentVel > maxVel) {
+                                const ratio = maxVel / currentVel;
+                                vel.x *= ratio;
+                                vel.y *= ratio;
+                            }
+                        }
 
                         curPt.x += vel.x * subDt;
                         curPt.y += vel.y * subDt;

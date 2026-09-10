@@ -416,11 +416,12 @@ export const calculateInterpolationWeights = (
   exponent: number = 2,
   strategy: InterpolationStrategy = 'bilinear-grid',
   allowExtrapolation: boolean = false,
-  extrapolationFactor: number = 0.2
+  extrapolationFactor: number = 0.2,
+  gridCurvature: number = 1.0
 ): Record<string, number> => {
    if (keyframes.length === 0) return {};
    if (keyframes.length === 1) return { [keyframes[0].id]: 1.0 };
-   if (strategy === 'bilinear-grid') return calculateBilinearGridWeights(currentAxes, keyframes, allowExtrapolation, extrapolationFactor);
+   if (strategy === 'bilinear-grid') return calculateBilinearGridWeights(currentAxes, keyframes, allowExtrapolation, extrapolationFactor, gridCurvature);
    return calculateIDWWeights(currentAxes, keyframes, exponent, allowExtrapolation, extrapolationFactor);
 };
 

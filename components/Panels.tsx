@@ -6,7 +6,7 @@ import { BlendMode, InterpolationMode, Theme, PlayModeCursorType, PlayModeCursor
 import { PALETTE_COLORS } from '../constants';
 
 export const LayerPanel: React.FC = () => {
-  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, setLayerDriverMode, toggleLayerSymmetry, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
+  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, setLayerDriverMode, toggleLayerSymmetry, toggleLayerGuideMode, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
   const layers = project.layers.filter(l => !l.id.includes('-sym-'));
   const { theme } = ui;
 
@@ -209,8 +209,17 @@ export const LayerPanel: React.FC = () => {
             
             {/* Quick Actions */}
             <div className="flex gap-1.5 items-center">
-                 {/* Guide Layer Indicator */}
-                 {layer.isGuide && (
+                 {/* Guide Layer / Matrix Toggle (Non-expert mode) */}
+                 {!ui.expertModeEnabled && (
+                   <button 
+                      onClick={(e) => { e.stopPropagation(); toggleLayerGuideMode(layer.id); }}
+                      className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-0.5 ${layer.isGuide ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100' : 'text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100'}`}
+                      title={layer.isGuide ? "Passer en mode Matrice (Interpolation dynamique)" : "Passer en mode Repère (Dessin libre fixe)"}
+                   >
+                      {layer.isGuide ? 'REP' : 'MTX'}
+                   </button>
+                 )}
+                 {ui.expertModeEnabled && layer.isGuide && (
                    <span 
                       className="h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border text-amber-700 bg-amber-50 border-amber-200 flex items-center gap-0.5"
                       title="Calque Repère (Dessin libre sans interpolation)"
@@ -372,7 +381,9 @@ const SettingsToggle = ({ label, active, onClick }: { label: string, active: boo
 export const SettingsPanel: React.FC = () => {
   const { 
       project, toggleSettings, ui, 
-      toggleGrid, toggleSnapToGrid, setSnapScale, toggleOnionSkin, 
+      toggleGrid, toggleSnapToGrid, setSnapScale, toggleOnionSkin, toggleGuideOnionSkin,
+      toggleGuideOnionSkinInPlayMode, toggleGuideOnionDistanceOpacity, setGuideOnionDistanceRange,
+      toggleGuideOnionDirectionalTint, setGuideOnionColor,
       setOnionSkinOpacity, setOnionSkinMode, toggleSmoothing, 
       resetProject, loadProject, toggleSnapMatrixGrid, 
       setAxisMatrixDivisions, setAxisMatrixPadding, 
@@ -387,7 +398,9 @@ export const SettingsPanel: React.FC = () => {
       toggleOvershootMomentum, setOvershootMomentumFactor,
       toggleOvershootExtrapolation, setOvershootExtrapolationFactor,
       toggleOvershootVertexInertia, setOvershootVertexInertiaFactor, setOvershootVertexDamping, setOvershootVertexMass,
+      setOvershootVertexSnapProtection,
       toggleOvershootExaggeration, setOvershootExaggerationFactor,
+      setGridCurvature,
       setLayerCornerRoundness, setStrokeCap, setPlayModeCursor,
       setPlayModeCursorShape, setPlayModeCursorSize, setPlayModeCursorColor, toggleLayerGuideMode,
       updateLayerStrokeColor, updateLayerFillColor, updateLayerStrokeWidth,
@@ -461,6 +474,7 @@ export const SettingsPanel: React.FC = () => {
               axisMatrixPadding: ui.axisMatrixPadding,
               interpolationExponent: ui.interpolationExponent,
               interpolationStrategy: ui.interpolationStrategy,
+              gridCurvature: ui.gridCurvature,
               playModePhysics: ui.playModePhysics,
               springStiffness: ui.springStiffness,
               springDamping: ui.springDamping,
@@ -476,6 +490,7 @@ export const SettingsPanel: React.FC = () => {
               overshootVertexInertiaFactor: ui.overshootVertexInertiaFactor,
               overshootVertexDamping: ui.overshootVertexDamping,
               overshootVertexMass: ui.overshootVertexMass,
+              overshootVertexSnapProtection: ui.overshootVertexSnapProtection,
               overshootExaggerationEnabled: ui.overshootExaggerationEnabled,
               overshootExaggerationFactor: ui.overshootExaggerationFactor,
               strokeCap: ui.strokeCap,
@@ -834,8 +849,40 @@ export const SettingsPanel: React.FC = () => {
                 {/* ONION SKIN */}
                 <div className="bg-orange-50/50 rounded-xl p-3 border border-orange-100 space-y-3">
                     <SettingsToggle label="Onion Skin (Other States)" active={ui.onionSkinEnabled} onClick={toggleOnionSkin} />
+                    <SettingsToggle label="Guide Onion Skin (Reference States)" active={ui.guideOnionSkinEnabled} onClick={toggleGuideOnionSkin} />
                     
-                    {ui.onionSkinEnabled && (
+                    {ui.guideOnionSkinEnabled && (
+                       <div className="space-y-3 pt-2 pb-1 border-t border-orange-200/40">
+                           <SettingsToggle label="Show Guide Onion Skin in Play Mode" active={ui.guideOnionSkinInPlayMode} onClick={toggleGuideOnionSkinInPlayMode} />
+                           
+                           <SettingsToggle label="Fade by Distance (Matrix)" active={ui.guideOnionDistanceOpacity} onClick={toggleGuideOnionDistanceOpacity} />
+                           {ui.guideOnionDistanceOpacity && (
+                               <SettingsRow label="Fade Range" value={ui.guideOnionDistanceRange.toFixed(1)}>
+                                   <input type="range" min="0.5" max="5.0" step="0.5" value={ui.guideOnionDistanceRange} onChange={(e) => setGuideOnionDistanceRange(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-500 hover:accent-orange-600"/>
+                               </SettingsRow>
+                           )}
+
+                           <SettingsToggle label="Directional Matrix Tint" active={ui.guideOnionDirectionalTint} onClick={toggleGuideOnionDirectionalTint} />
+                           {ui.guideOnionDirectionalTint && (
+                               <div className="grid grid-cols-2 gap-2 mt-2">
+                                    <SettingsRow label="Left">
+                                        <input type="color" value={ui.guideOnionColorLeft} onChange={e => setGuideOnionColor('Left', e.target.value)} className="w-6 h-6 rounded cursor-pointer border-none bg-transparent p-0" />
+                                    </SettingsRow>
+                                    <SettingsRow label="Right">
+                                        <input type="color" value={ui.guideOnionColorRight} onChange={e => setGuideOnionColor('Right', e.target.value)} className="w-6 h-6 rounded cursor-pointer border-none bg-transparent p-0" />
+                                    </SettingsRow>
+                                    <SettingsRow label="Up">
+                                        <input type="color" value={ui.guideOnionColorUp} onChange={e => setGuideOnionColor('Up', e.target.value)} className="w-6 h-6 rounded cursor-pointer border-none bg-transparent p-0" />
+                                    </SettingsRow>
+                                    <SettingsRow label="Down">
+                                        <input type="color" value={ui.guideOnionColorDown} onChange={e => setGuideOnionColor('Down', e.target.value)} className="w-6 h-6 rounded cursor-pointer border-none bg-transparent p-0" />
+                                    </SettingsRow>
+                               </div>
+                           )}
+                       </div>
+                    )}
+                    
+                    {(ui.onionSkinEnabled || ui.guideOnionSkinEnabled) && (
                        <div className="space-y-3 pt-2 border-t border-orange-200/40">
                            <SettingsRow label="Onion Skin Opacity" value={`${Math.round(ui.onionSkinOpacity * 100)}%`}>
                                <input type="range" min="0.05" max="0.8" step="0.05" value={ui.onionSkinOpacity} onChange={(e) => setOnionSkinOpacity(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-500 hover:accent-orange-600"/>
@@ -1141,6 +1188,7 @@ export const SettingsPanel: React.FC = () => {
                                         axisMatrixPadding: ui.axisMatrixPadding,
                                         interpolationExponent: ui.interpolationExponent,
                                         interpolationStrategy: ui.interpolationStrategy,
+                                        gridCurvature: ui.gridCurvature,
                                         playModePhysics: ui.playModePhysics,
                                         springStiffness: ui.springStiffness,
                                         springDamping: ui.springDamping,
@@ -1156,6 +1204,7 @@ export const SettingsPanel: React.FC = () => {
                                         overshootVertexInertiaFactor: ui.overshootVertexInertiaFactor,
                                         overshootVertexDamping: ui.overshootVertexDamping,
                                         overshootVertexMass: ui.overshootVertexMass,
+                                        overshootVertexSnapProtection: ui.overshootVertexSnapProtection,
                                         overshootExaggerationEnabled: ui.overshootExaggerationEnabled,
                                         overshootExaggerationFactor: ui.overshootExaggerationFactor,
                                         strokeCap: ui.strokeCap,
@@ -1372,6 +1421,9 @@ export const SettingsPanel: React.FC = () => {
                                             <SettingsRow label="Weight / Inertial Lag (Mass)" value={`x${(ui.overshootVertexMass ?? 2.0).toFixed(2)}`}>
                                                 <input type="range" min="0.2" max="2.5" step="0.05" value={ui.overshootVertexMass ?? 2.0} onChange={(e) => setOvershootVertexMass(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
                                             </SettingsRow>
+                                            <SettingsRow label="Anti-Snap / Protection Fouet" value={`${Math.round((ui.overshootVertexSnapProtection ?? 0.75) * 100)}%`}>
+                                                <input type="range" min="0" max="1" step="0.05" value={ui.overshootVertexSnapProtection ?? 0.75} onChange={(e) => setOvershootVertexSnapProtection(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                                            </SettingsRow>
                                         </div>
                                     )}
                                 </div>
@@ -1391,7 +1443,7 @@ export const SettingsPanel: React.FC = () => {
                  </div>
 
                 <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block mt-4">Algorithm</label>
-                <div className="flex bg-gray-100/80 rounded-xl p-1.5 gap-1 mb-4">
+                <div className="flex bg-gray-100/80 rounded-xl p-1.5 gap-1 mb-2">
                     <button onClick={() => setInterpolationStrategy('bilinear-grid')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${ui.interpolationStrategy === 'bilinear-grid' ? 'bg-white shadow text-blue-600 ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-700'}`}>
                         Bilinear Grid
                     </button>
@@ -1399,6 +1451,13 @@ export const SettingsPanel: React.FC = () => {
                         Radial (IDW)
                     </button>
                 </div>
+                {ui.interpolationStrategy === 'bilinear-grid' && (
+                    <div className="mb-4">
+                        <SettingsRow label="Courbure / Lissage C1" value={`${Math.round((ui.gridCurvature ?? 1.0) * 100)}%`}>
+                            <input type="range" min="0" max="1" step="0.05" value={ui.gridCurvature ?? 1.0} onChange={(e) => setGridCurvature(parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-600"/>
+                        </SettingsRow>
+                    </div>
+                )}
 
                 <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Stroke Definition</label>
                 <SettingsRow label="Max Points (Resolution)" value={`${ui.strokeResolution} pts`}>

@@ -506,13 +506,46 @@ export class ProsopopusPlayer {
     project.layers.forEach(layer => {
       if (!layer.visible) return;
 
-      if (layer.isGuide) {
-        // Guide / Reference layer: Render all strokes directly without interpolation
-        const guideStrokes = (layer.guideStrokes && layer.guideStrokes.length > 0)
-          ? layer.guideStrokes
-          : (project.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
+      const layerRelevantKeyframes = project.keyframes.filter(kf => {
+        const ls = kf.layerStates.find(s => s.layerId === layer.id);
+        return ls && ls.strokes.length > 0;
+      });
 
-        guideStrokes.forEach(s => {
+      if (layer.isGuide) {
+        // Guide / Reference layer: Render nearest state in play mode, or direct strokes otherwise
+        let strokesToRender = [];
+
+        if (layerRelevantKeyframes.length > 0) {
+          const weights = calculateInterpolationWeights(
+            currentAxes, 
+            layerRelevantKeyframes, 
+            settings.interpolationExponent || 2.0, 
+            settings.interpolationStrategy || 'bilinear-grid',
+            false, 
+            0,
+            settings.gridCurvature ?? 1.0
+          );
+
+          let maxWeight = -Infinity;
+          let nearestKfId = '';
+          for (const kfId in weights) {
+             if (weights[kfId] > maxWeight) {
+                 maxWeight = weights[kfId];
+                 nearestKfId = kfId;
+             }
+          }
+          
+          const nearestKf = layerRelevantKeyframes.find(k => k.id === nearestKfId);
+          if (nearestKf) {
+              strokesToRender = nearestKf.layerStates.find(ls => ls.layerId === layer.id)?.strokes || [];
+          }
+        } else {
+           strokesToRender = (layer.guideStrokes && layer.guideStrokes.length > 0)
+            ? layer.guideStrokes
+            : (project.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
+        }
+
+        strokesToRender.forEach(s => {
           if (!s || !s.points || s.points.length === 0) return;
           const resolved = resolveStrokeStyle(s, layer);
           ctx.beginPath();
@@ -536,11 +569,6 @@ export class ProsopopusPlayer {
         });
         return;
       }
-
-      const layerRelevantKeyframes = project.keyframes.filter(kf => {
-        const ls = kf.layerStates.find(s => s.layerId === layer.id);
-        return ls && ls.strokes.length > 0;
-      });
 
       if (layerRelevantKeyframes.length === 0) return;
 
@@ -615,6 +643,7 @@ export class ProsopopusPlayer {
         } else {
           const subSteps = 2;
           const subDt = Math.min(dt, 0.05) / subSteps;
+          const snapProtection = settings.overshootVertexSnapProtection ?? 0.75;
 
           for (let step = 0; step < subSteps; step++) {
             for (let i = 0; i < interpolatedPoints.length; i++) {
@@ -622,12 +651,43 @@ export class ProsopopusPlayer {
               const curPt = stored.current[i];
               const vel = stored.velocity[i];
 
+              const dx = targetPt.x - curPt.x;
+              const dy = targetPt.y - curPt.y;
+              const dist = Math.hypot(dx, dy);
+
+              // Adaptive damping: dynamically increases when displacement is large to prevent runaway whipping
+              const effectiveDamping = snapProtection > 0
+                ? damping * (1 + snapProtection * Math.min(3.0, dist / 80.0))
+                : damping;
+
               // Spring-Damper-Mass Force: F = k*(target - cur) - c*vel
-              const springF_x = (targetPt.x - curPt.x) * stiffness - vel.x * damping;
-              const springF_y = (targetPt.y - curPt.y) * stiffness - vel.y * damping;
+              let springF_x = dx * stiffness - vel.x * effectiveDamping;
+              let springF_y = dy * stiffness - vel.y * effectiveDamping;
+
+              if (snapProtection > 0) {
+                // Clamp acceleration
+                const maxAcc = 20000 * (1 - snapProtection * 0.4);
+                const currentAcc = Math.hypot(springF_x / mass, springF_y / mass);
+                if (currentAcc > maxAcc) {
+                  const ratio = maxAcc / currentAcc;
+                  springF_x *= ratio;
+                  springF_y *= ratio;
+                }
+              }
 
               vel.x += (springF_x / mass) * subDt;
               vel.y += (springF_y / mass) * subDt;
+
+              if (snapProtection > 0) {
+                // Clamp velocity
+                const maxVel = 2500 * (1 - snapProtection * 0.35);
+                const currentVel = Math.hypot(vel.x, vel.y);
+                if (currentVel > maxVel) {
+                  const ratio = maxVel / currentVel;
+                  vel.x *= ratio;
+                  vel.y *= ratio;
+                }
+              }
 
               curPt.x += vel.x * subDt;
               curPt.y += vel.y * subDt;

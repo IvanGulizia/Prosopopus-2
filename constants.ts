@@ -202,8 +202,17 @@ export const INITIAL_UI_STATE: UIState = {
   smoothingEnabled: true, // Smoothing toggle
   strokeSmoothingFactor: 0.2, // 0 to 1 (0 = Raw/Detailed points, 1 = Heavy smoothing)
   onionSkinEnabled: true, // Enabled by default as requested
+  guideOnionSkinEnabled: true, // Enabled by default as requested
+  guideOnionSkinInPlayMode: false,
+  guideOnionDistanceOpacity: true,
+  guideOnionDistanceRange: 1.0,
+  guideOnionDirectionalTint: true,
+  guideOnionColorUp: '#22c55e',
+  guideOnionColorDown: '#f97316',
+  guideOnionColorLeft: '#ef4444',
+  guideOnionColorRight: '#3b82f6',
   onionSkinOpacity: 0.2,
-  onionSkinMode: 'both',
+  onionSkinMode: 'styled',
   inactiveLayerOpacity: 0.35,
   inactiveLayerMode: 'dimmed',
 

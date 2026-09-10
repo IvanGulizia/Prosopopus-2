@@ -145,6 +145,12 @@ interface StoreState {
   toggleSmoothing: () => void; // Renamed from toggleSimplifyStrokes
   
   toggleOnionSkin: () => void;
+  toggleGuideOnionSkin: () => void;
+  toggleGuideOnionSkinInPlayMode: () => void;
+  toggleGuideOnionDistanceOpacity: () => void;
+  setGuideOnionDistanceRange: (range: number) => void;
+  toggleGuideOnionDirectionalTint: () => void;
+  setGuideOnionColor: (direction: 'Up' | 'Down' | 'Left' | 'Right', color: string) => void;
   setOnionSkinOpacity: (opacity: number) => void;
   setOnionSkinMode: (mode: OnionSkinMode) => void;
   setInactiveLayerOpacity: (opacity: number) => void;
@@ -1095,6 +1101,12 @@ export const useStore = create<StoreState>((set, get) => ({
   toggleSmoothing: () => set((state) => ({ ui: { ...state.ui, smoothingEnabled: !state.ui.smoothingEnabled } })),
   
   toggleOnionSkin: () => set((state) => ({ ui: { ...state.ui, onionSkinEnabled: !state.ui.onionSkinEnabled } })),
+  toggleGuideOnionSkin: () => set((state) => ({ ui: { ...state.ui, guideOnionSkinEnabled: !state.ui.guideOnionSkinEnabled } })),
+  toggleGuideOnionSkinInPlayMode: () => set((state) => ({ ui: { ...state.ui, guideOnionSkinInPlayMode: !state.ui.guideOnionSkinInPlayMode } })),
+  toggleGuideOnionDistanceOpacity: () => set((state) => ({ ui: { ...state.ui, guideOnionDistanceOpacity: !state.ui.guideOnionDistanceOpacity } })),
+  setGuideOnionDistanceRange: (range) => set((state) => ({ ui: { ...state.ui, guideOnionDistanceRange: range } })),
+  toggleGuideOnionDirectionalTint: () => set((state) => ({ ui: { ...state.ui, guideOnionDirectionalTint: !state.ui.guideOnionDirectionalTint } })),
+  setGuideOnionColor: (direction, color) => set((state) => ({ ui: { ...state.ui, [`guideOnionColor${direction}`]: color } })),
   setOnionSkinOpacity: (opacity) => set((state) => ({ ui: { ...state.ui, onionSkinOpacity: opacity } })),
   setOnionSkinMode: (mode) => set((state) => ({ ui: { ...state.ui, onionSkinMode: mode } })),
   setInactiveLayerOpacity: (opacity) => set((state) => ({ ui: { ...state.ui, inactiveLayerOpacity: opacity } })),
@@ -1430,20 +1442,23 @@ export const useStore = create<StoreState>((set, get) => ({
       });
 
       newKeyframes = keyframes.map(kf => {
-        let newLayerStates = [...kf.layerStates];
-        const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
-        if (existingLayerStateIndex >= 0) {
-          newLayerStates[existingLayerStateIndex] = {
-            ...newLayerStates[existingLayerStateIndex],
-            strokes: [...newLayerStates[existingLayerStateIndex].strokes, newStroke]
-          };
-        } else {
-          newLayerStates.push({
-            layerId: selectedLayerId,
-            strokes: [newStroke]
-          });
+        if (kf.id === targetKeyframeId) {
+          let newLayerStates = [...kf.layerStates];
+          const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+          if (existingLayerStateIndex >= 0) {
+            newLayerStates[existingLayerStateIndex] = {
+              ...newLayerStates[existingLayerStateIndex],
+              strokes: [...newLayerStates[existingLayerStateIndex].strokes, newStroke]
+            };
+          } else {
+            newLayerStates.push({
+              layerId: selectedLayerId,
+              strokes: [newStroke]
+            });
+          }
+          return { ...kf, layerStates: newLayerStates };
         }
-        return { ...kf, layerStates: newLayerStates };
+        return kf;
       });
     } else {
       newKeyframes = keyframes.map(kf => {
@@ -2527,20 +2542,23 @@ export const useStore = create<StoreState>((set, get) => ({
       });
 
       newKeyframes = keyframes.map(kf => {
-        let newLayerStates = [...kf.layerStates];
-        const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
-        if (existingLayerStateIndex >= 0) {
-          newLayerStates[existingLayerStateIndex] = {
-            ...newLayerStates[existingLayerStateIndex],
-            strokes: [...newLayerStates[existingLayerStateIndex].strokes, newStroke]
-          };
-        } else {
-          newLayerStates.push({
-            layerId: selectedLayerId,
-            strokes: [newStroke]
-          });
+        if (kf.id === targetKeyframeId) {
+          let newLayerStates = [...kf.layerStates];
+          const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+          if (existingLayerStateIndex >= 0) {
+            newLayerStates[existingLayerStateIndex] = {
+              ...newLayerStates[existingLayerStateIndex],
+              strokes: [...newLayerStates[existingLayerStateIndex].strokes, newStroke]
+            };
+          } else {
+            newLayerStates.push({
+              layerId: selectedLayerId,
+              strokes: [newStroke]
+            });
+          }
+          return { ...kf, layerStates: newLayerStates };
         }
-        return { ...kf, layerStates: newLayerStates };
+        return kf;
       });
     } else {
       newKeyframes = keyframes.map(kf => {

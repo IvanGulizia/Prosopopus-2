@@ -411,6 +411,15 @@ export interface UIState {
   smoothingEnabled: boolean; // Renamed from simplifyStrokes
   strokeSmoothingFactor: number; // 0 to 1 (0 = Raw/Ultra-detailed, 1 = Heavy smoothing)
   onionSkinEnabled: boolean;
+  guideOnionSkinEnabled: boolean;
+  guideOnionSkinInPlayMode: boolean; // Optional onion skin for guide layers in Play mode
+  guideOnionDistanceOpacity: boolean; // Base opacity on distance in matrix
+  guideOnionDistanceRange: number; // Range for distance fading
+  guideOnionDirectionalTint: boolean; // Tint onions based on matrix direction
+  guideOnionColorUp: string;
+  guideOnionColorDown: string;
+  guideOnionColorLeft: string;
+  guideOnionColorRight: string;
   onionSkinOpacity: number;
   onionSkinMode: OnionSkinMode; // 'wireframe' | 'styled' | 'both'
   inactiveLayerOpacity: number; // 0 to 1, opacity of non-selected layers
