@@ -29,6 +29,7 @@ import firebaseConfig from '../firebase-applet-config.json';
 import { Project } from '../types';
 
 export const ADMIN_EMAIL = 'gulizia.i@gmail.com';
+export const ADMIN_MASTER_PASSCODE = 'prosopopus2026';
 
 export enum OperationType {
   CREATE = 'create',
@@ -103,6 +104,7 @@ export interface CommunityCreation {
   authorName: string;
   projectJson: string;
   thumbnail?: string;
+  deletePasscode?: string;
   reportCount: number;
   createdAt: any;
 }
@@ -117,12 +119,32 @@ export function generateRandomId(length = 20): string {
   return result;
 }
 
+export function getMySavedCreations(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem('prosopopus_my_creations');
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+export function saveMyCreationPasscode(creationId: string, passcode: string) {
+  try {
+    const map = getMySavedCreations();
+    map[creationId] = passcode;
+    localStorage.setItem('prosopopus_my_creations', JSON.stringify(map));
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
 // Publish a project to community gallery
 export async function publishCreation(
   title: string, 
   authorName: string, 
   project: Project, 
-  thumbnail?: string
+  thumbnail?: string,
+  deletePasscode?: string
 ): Promise<string> {
   const creationId = generateRandomId(20);
   const path = `creations/${creationId}`;
@@ -133,21 +155,29 @@ export async function publishCreation(
     throw new Error("Ce projet est trop volumineux pour être partagé (limite ~900 Ko).");
   }
 
-  // Thumbnail safety size
-  const safeThumbnail = thumbnail && thumbnail.length <= 150000 ? thumbnail : undefined;
+  // Use provided passcode or generate a simple 4-digit PIN
+  const cleanPasscode = deletePasscode && deletePasscode.trim().length > 0 
+    ? deletePasscode.trim().slice(0, 32) 
+    : String(Math.floor(1000 + Math.random() * 9000));
 
-  const payload = {
+  const payload: Record<string, any> = {
     title: title.trim().slice(0, 100),
     authorName: authorName.trim().slice(0, 50) || 'Anonyme',
     projectJson: serialized,
-    thumbnail: safeThumbnail,
+    deletePasscode: cleanPasscode,
     reportCount: 0,
     createdAt: serverTimestamp()
   };
 
+  if (thumbnail && thumbnail.length > 0 && thumbnail.length <= 150000) {
+    payload.thumbnail = thumbnail;
+  }
+
   try {
     const docRef = doc(db, 'creations', creationId);
     await setDoc(docRef, payload);
+    // Save in author's browser for auto-filling and 1-click delete
+    saveMyCreationPasscode(creationId, cleanPasscode);
     return creationId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
@@ -159,12 +189,20 @@ export async function publishCreation(
 export async function fetchCreations(maxItems = 50): Promise<CommunityCreation[]> {
   const path = 'creations';
   try {
-    const q = query(
-      collection(db, path),
-      orderBy('createdAt', 'desc'),
-      limit(maxItems)
-    );
-    const snap = await getDocs(q);
+    let snap;
+    try {
+      const q = query(
+        collection(db, path),
+        orderBy('createdAt', 'desc'),
+        limit(maxItems)
+      );
+      snap = await getDocs(q);
+    } catch (orderErr) {
+      console.warn('orderBy query failed, falling back to basic collection query:', orderErr);
+      const fallbackQuery = query(collection(db, path), limit(maxItems));
+      snap = await getDocs(fallbackQuery);
+    }
+
     const results: CommunityCreation[] = [];
     snap.forEach((docSnap) => {
       const data = docSnap.data();
@@ -176,6 +214,7 @@ export async function fetchCreations(maxItems = 50): Promise<CommunityCreation[]
           authorName: data.authorName || 'Artiste',
           projectJson: data.projectJson,
           thumbnail: data.thumbnail,
+          deletePasscode: data.deletePasscode,
           reportCount: data.reportCount || 0,
           createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(),
         });
@@ -201,7 +240,47 @@ export async function reportCreation(creationId: string): Promise<void> {
   }
 }
 
-// Admin delete
+// Delete with Passcode (User PIN or Admin Master Password)
+export async function deleteCreationWithPasscode(
+  creation: CommunityCreation, 
+  inputPasscode: string
+): Promise<{ success: boolean; message: string }> {
+  const cleanInput = inputPasscode.trim();
+  const isAdmin = cleanInput === ADMIN_MASTER_PASSCODE;
+  const isAuthor = Boolean(creation.deletePasscode && cleanInput === creation.deletePasscode);
+
+  if (!isAdmin && !isAuthor) {
+    return { 
+      success: false, 
+      message: "Code incorrect. Entrez le code PIN de cette création ou le mot de passe Admin." 
+    };
+  }
+
+  const path = `creations/${creation.id}`;
+  try {
+    const docRef = doc(db, 'creations', creation.id);
+    await deleteDoc(docRef);
+
+    // Clean from local storage if saved
+    try {
+      const map = getMySavedCreations();
+      delete map[creation.id];
+      localStorage.setItem('prosopopus_my_creations', JSON.stringify(map));
+    } catch (e) {
+      // ignore
+    }
+
+    return { 
+      success: true, 
+      message: isAdmin ? "Animation supprimée par l'Administrateur." : "Votre animation a été supprimée avec succès." 
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+    return { success: false, message: "Erreur lors de la suppression." };
+  }
+}
+
+// Direct Admin delete (fallback)
 export async function deleteCreation(creationId: string): Promise<void> {
   const path = `creations/${creationId}`;
   try {

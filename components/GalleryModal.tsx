@@ -4,14 +4,11 @@ import { useStore } from '../store/useStore';
 import { 
   fetchCreations, 
   reportCreation, 
-  deleteCreation, 
-  signInAdmin, 
-  signOutAdmin, 
-  auth, 
-  ADMIN_EMAIL, 
+  deleteCreationWithPasscode,
+  ADMIN_MASTER_PASSCODE,
+  getMySavedCreations,
   CommunityCreation 
 } from '../services/firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
 
 interface GalleryModalProps {
   isOpen: boolean;
@@ -26,29 +23,42 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
   const [creations, setCreations] = useState<CommunityCreation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [reportedIds, setReportedIds] = useState<Set<string>>(new Set());
+  const [myCreationsMap, setMyCreationsMap] = useState<Record<string, string>>({});
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
-  // Monitor auth state
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-    });
-    return () => unsubscribe();
-  }, []);
+  // Admin session state (stored in sessionStorage)
+  const [isAdminMode, setIsAdminMode] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('prosopopus_admin_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
-  // Load reported IDs from localStorage
+  // Modals for password entry
+  const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
+  const [adminInputPassword, setAdminInputPassword] = useState('');
+  const [adminLoginError, setAdminLoginError] = useState<string | null>(null);
+
+  // Delete modal state
+  const [deleteTarget, setDeleteTarget] = useState<CommunityCreation | null>(null);
+  const [deleteInputCode, setDeleteInputCode] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Load reported IDs & local creations map
   useEffect(() => {
     try {
       const saved = localStorage.getItem('prosopopus_reported_ids');
       if (saved) {
         setReportedIds(new Set(JSON.parse(saved)));
       }
+      setMyCreationsMap(getMySavedCreations());
     } catch (e) {
       console.warn(e);
     }
-  }, []);
+  }, [isOpen]);
 
   const loadData = async () => {
     setIsLoading(true);
@@ -67,8 +77,6 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
       loadData();
     }
   }, [isOpen]);
-
-  const isAdmin = currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   const filteredCreations = useMemo(() => {
     if (!searchTerm.trim()) return creations;
@@ -105,16 +113,71 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
     }
   };
 
-  const handleDelete = async (creationId: string) => {
-    if (!window.confirm("Action Modérateur : Voulez-vous définitivement supprimer cette création de la galerie ?")) return;
-    try {
-      await deleteCreation(creationId);
-      setCreations(prev => prev.filter(c => c.id !== creationId));
-      setActionMessage("Création supprimée par le modérateur.");
-      setTimeout(() => setActionMessage(null), 3000);
-    } catch (err) {
-      alert("Erreur lors de la suppression.");
+  // Open deletion modal or direct delete if already in Admin mode
+  const initiateDelete = (creation: CommunityCreation) => {
+    if (isAdminMode) {
+      if (window.confirm(`Supprimer définitivement "${creation.title}" en mode Administrateur ?`)) {
+        performDirectDelete(creation, ADMIN_MASTER_PASSCODE);
+      }
+      return;
     }
+
+    setDeleteTarget(creation);
+    setDeleteError(null);
+    // Pre-fill passcode if created from this browser
+    const myPass = myCreationsMap[creation.id] || '';
+    setDeleteInputCode(myPass);
+  };
+
+  const performDirectDelete = async (creation: CommunityCreation, passcode: string) => {
+    setIsDeleting(true);
+    try {
+      const res = await deleteCreationWithPasscode(creation, passcode);
+      if (res.success) {
+        setCreations(prev => prev.filter(c => c.id !== creation.id));
+        setDeleteTarget(null);
+        setActionMessage(res.message);
+        setTimeout(() => setActionMessage(null), 3000);
+      } else {
+        setDeleteError(res.message);
+      }
+    } catch (e: any) {
+      setDeleteError("Erreur lors de la suppression.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleConfirmDelete = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deleteTarget) return;
+    performDirectDelete(deleteTarget, deleteInputCode);
+  };
+
+  const handleAdminLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (adminInputPassword.trim() === ADMIN_MASTER_PASSCODE) {
+      setIsAdminMode(true);
+      try {
+        sessionStorage.setItem('prosopopus_admin_mode', 'true');
+      } catch {}
+      setShowAdminLoginModal(false);
+      setAdminInputPassword('');
+      setAdminLoginError(null);
+      setActionMessage("Mode Administrateur activé !");
+      setTimeout(() => setActionMessage(null), 3000);
+    } else {
+      setAdminLoginError("Mot de passe incorrect.");
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdminMode(false);
+    try {
+      sessionStorage.removeItem('prosopopus_admin_mode');
+    } catch {}
+    setActionMessage("Mode Administrateur désactivé.");
+    setTimeout(() => setActionMessage(null), 3000);
   };
 
   if (!isOpen) return null;
@@ -125,7 +188,7 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
       onClick={onClose}
     >
       <div 
-        className="w-full max-w-4xl h-[85vh] rounded-3xl shadow-2xl border flex flex-col pointer-events-auto overflow-hidden"
+        className="w-full max-w-4xl h-[85vh] rounded-3xl shadow-2xl border flex flex-col pointer-events-auto overflow-hidden relative"
         style={{ 
           backgroundColor: theme.bgPanel, 
           borderColor: theme.border, 
@@ -190,26 +253,36 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
             <span className="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-40 text-xs">🔍</span>
           </div>
 
-          {/* Admin / Moderator Area */}
+          {/* Admin Mode Bar */}
           <div className="flex items-center gap-2 text-xs">
-            {isAdmin ? (
-              <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 font-semibold">
-                <span>🛡️ Modérateur ({currentUser?.email})</span>
-                <button onClick={() => signOutAdmin()} className="text-[10px] underline hover:opacity-80">Déconnexion</button>
+            {isAdminMode ? (
+              <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 font-semibold text-xs">
+                <span>🛡️ Mode Admin actif</span>
+                <button 
+                  onClick={handleAdminLogout} 
+                  className="text-[10px] underline hover:opacity-80 ml-1"
+                >
+                  Quitter
+                </button>
               </div>
             ) : (
               <button 
-                onClick={() => signInAdmin()}
-                className="opacity-60 hover:opacity-100 flex items-center gap-1 transition-opacity text-[11px]"
-                title="Connexion Google pour le propriétaire/modérateur"
+                onClick={() => {
+                  setShowAdminLoginModal(true);
+                  setAdminLoginError(null);
+                }}
+                className="opacity-70 hover:opacity-100 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border hover:bg-black/5 transition-all text-xs"
+                style={{ borderColor: theme.border }}
+                title="Accès Administrateur par mot de passe"
               >
-                <span>🛡️ Espace Modération</span>
+                <span>🔑</span>
+                <span>Mode Admin</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Feedback message */}
+        {/* Feedback banner */}
         {actionMessage && (
           <div className="bg-blue-600 text-white text-xs py-1.5 px-4 text-center font-medium">
             {actionMessage}
@@ -225,7 +298,7 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
             </div>
           ) : filteredCreations.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center gap-3 text-center">
-              <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-xl">
+              <div className="w-12 h-12 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-xl">
                 🎨
               </div>
               <div>
@@ -248,12 +321,21 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               {filteredCreations.map((creation) => {
                 const isReported = reportedIds.has(creation.id);
+                const isMine = Boolean(myCreationsMap[creation.id]);
+
                 return (
                   <div 
                     key={creation.id}
-                    className="rounded-2xl border overflow-hidden flex flex-col transition-all hover:shadow-lg group"
+                    className="rounded-2xl border overflow-hidden flex flex-col transition-all hover:shadow-lg group relative"
                     style={{ backgroundColor: theme.bgApp, borderColor: theme.border }}
                   >
+                    {/* Mine badge */}
+                    {isMine && (
+                      <span className="absolute top-2 left-2 z-10 text-[9px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-sm">
+                        Mon animation
+                      </span>
+                    )}
+
                     {/* Thumbnail */}
                     <div className="aspect-video bg-gray-100 dark:bg-gray-800 relative overflow-hidden flex items-center justify-center border-b" style={{ borderColor: theme.border }}>
                       {creation.thumbnail ? (
@@ -303,16 +385,26 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
                           🚩
                         </button>
 
-                        {/* Admin delete button */}
-                        {isAdmin && (
-                          <button
-                            onClick={() => handleDelete(creation.id)}
-                            title="Supprimer définitivement (Modérateur)"
-                            className="p-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 text-xs shadow-sm"
-                          >
-                            🗑️
-                          </button>
-                        )}
+                        {/* Delete button (for author or admin) */}
+                        <button
+                          onClick={() => initiateDelete(creation)}
+                          title={
+                            isAdminMode 
+                              ? "Supprimer directement (Mode Admin)" 
+                              : isMine 
+                                ? "Supprimer mon animation" 
+                                : "Supprimer (avec code PIN ou mot de passe Admin)"
+                          }
+                          className={`p-1.5 rounded-lg border text-xs transition-colors ${
+                            isAdminMode
+                              ? 'bg-red-600 text-white hover:bg-red-700 border-red-600 shadow-sm'
+                              : isMine
+                                ? 'bg-orange-500/10 text-orange-600 border-orange-500/20 hover:bg-red-500 hover:text-white'
+                                : 'opacity-40 hover:opacity-100 hover:bg-red-500 hover:text-white border-transparent'
+                          }`}
+                        >
+                          🗑️
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -321,6 +413,137 @@ export const GalleryModal: React.FC<GalleryModalProps> = ({ isOpen, onClose, onO
             </div>
           )}
         </div>
+
+        {/* Modal: Admin Login */}
+        {showAdminLoginModal && (
+          <div className="absolute inset-0 z-20 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+            <div 
+              className="w-full max-w-sm p-5 rounded-2xl border shadow-xl flex flex-col gap-4"
+              style={{ backgroundColor: theme.bgPanel, borderColor: theme.border }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🛡️</span>
+                  <h3 className="font-bold text-sm">Activer le Mode Administrateur</h3>
+                </div>
+                <button 
+                  onClick={() => setShowAdminLoginModal(false)}
+                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs opacity-60 hover:opacity-100"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className="text-xs" style={{ color: theme.textMuted }}>
+                Entrez le mot de passe Administrateur pour débloquer la suppression directe de n'importe quelle animation.
+              </p>
+
+              <form onSubmit={handleAdminLogin} className="space-y-3">
+                <input 
+                  type="password"
+                  required
+                  autoFocus
+                  value={adminInputPassword}
+                  onChange={(e) => setAdminInputPassword(e.target.value)}
+                  placeholder="Mot de passe admin..."
+                  className="w-full px-3 py-2 text-xs rounded-xl border outline-none focus:ring-2 focus:ring-blue-500/20"
+                  style={{ backgroundColor: theme.bgApp, borderColor: theme.border, color: theme.textMain }}
+                />
+
+                {adminLoginError && (
+                  <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 text-[11px] font-medium">
+                    {adminLoginError}
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminLoginModal(false)}
+                    className="px-3 py-1.5 text-xs rounded-lg border hover:bg-black/5"
+                    style={{ borderColor: theme.border }}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm"
+                  >
+                    Valider
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Delete Confirmation with PIN or Master Password */}
+        {deleteTarget && (
+          <div className="absolute inset-0 z-20 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+            <div 
+              className="w-full max-w-sm p-5 rounded-2xl border shadow-xl flex flex-col gap-4"
+              style={{ backgroundColor: theme.bgPanel, borderColor: theme.border }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🗑️</span>
+                  <h3 className="font-bold text-sm">Supprimer l'animation</h3>
+                </div>
+                <button 
+                  onClick={() => setDeleteTarget(null)}
+                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs opacity-60 hover:opacity-100"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold">{deleteTarget.title}</p>
+                <p className="text-[11px] mt-1" style={{ color: theme.textMuted }}>
+                  Pour supprimer cette animation, entrez le code PIN défini lors de sa publication, ou le mot de passe Administrateur :
+                </p>
+              </div>
+
+              <form onSubmit={handleConfirmDelete} className="space-y-3">
+                <input 
+                  type="text"
+                  required
+                  autoFocus
+                  value={deleteInputCode}
+                  onChange={(e) => setDeleteInputCode(e.target.value)}
+                  placeholder="Code PIN ou mot de passe Admin..."
+                  className="w-full px-3 py-2 text-xs rounded-xl border outline-none focus:ring-2 focus:ring-red-500/20 font-mono"
+                  style={{ backgroundColor: theme.bgApp, borderColor: theme.border, color: theme.textMain }}
+                />
+
+                {deleteError && (
+                  <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 text-[11px] font-medium">
+                    {deleteError}
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(null)}
+                    className="px-3 py-1.5 text-xs rounded-lg border hover:bg-black/5"
+                    style={{ borderColor: theme.border }}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isDeleting || !deleteInputCode.trim()}
+                    className="px-4 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm disabled:opacity-50"
+                  >
+                    {isDeleting ? "Suppression..." : "Confirmer la suppression"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );

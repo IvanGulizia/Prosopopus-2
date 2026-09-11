@@ -15,6 +15,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, onOpenG
   
   const [title, setTitle] = useState('');
   const [authorName, setAuthorName] = useState('');
+  const [deletePasscode, setDeletePasscode] = useState('');
   const [thumbnail, setThumbnail] = useState<string>('');
   const [isPublishing, setIsPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, onOpenG
         localStorage.setItem('prosopopus_author_name', authorName.trim());
       }
       
-      const id = await publishCreation(title, authorName, project, thumbnail);
+      const id = await publishCreation(title, authorName, project, thumbnail, deletePasscode);
       setSuccessId(id);
     } catch (err: any) {
       console.error(err);
@@ -189,6 +190,28 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, onOpenG
                 className="w-full px-3 py-2 text-sm rounded-xl border outline-none focus:ring-2 focus:ring-blue-500/30 transition-all"
                 style={{ backgroundColor: `${theme.bgApp}`, borderColor: theme.border, color: theme.textMain }}
               />
+            </div>
+
+            {/* Deletion Passcode */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold" style={{ color: theme.textMuted }}>
+                  Code secret de suppression (facultatif)
+                </label>
+                <span className="text-[10px] text-gray-400">Pour supprimer plus tard</span>
+              </div>
+              <input 
+                type="text" 
+                maxLength={20}
+                value={deletePasscode}
+                onChange={(e) => setDeletePasscode(e.target.value)}
+                placeholder="Ex: 1234 (généré auto si vide)"
+                className="w-full px-3 py-2 text-sm rounded-xl border outline-none focus:ring-2 focus:ring-blue-500/30 transition-all font-mono"
+                style={{ backgroundColor: `${theme.bgApp}`, borderColor: theme.border, color: theme.textMain }}
+              />
+              <p className="text-[10px] text-gray-400 mt-1">
+                Ce code permettra de supprimer cette création à tout moment depuis la galerie.
+              </p>
             </div>
 
             {error && (

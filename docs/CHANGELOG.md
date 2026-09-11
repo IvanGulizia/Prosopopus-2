@@ -16,7 +16,10 @@
   - Recherche en direct par titre ou artiste.
   - Bouton "Ouvrir" permettant de charger n'importe quelle animation de la communauté directement dans Prosopopus pour la jouer ou la modifier.
   - Système de signalement communautaire (🚩) avec masquage automatique en cas d'abus.
-  - Espace modérateur avec connexion Google pour l'administrateur (`gulizia.i@gmail.com`) avec suppression directe (🗑️).
+  - **Suppression par Code PIN & Mot de Passe Admin (100% sans popup)** :
+    - Définition optionnelle d'un code secret à la publication (généré et mémorisé automatiquement dans le navigateur de l'auteur).
+    - Bouton 🗑️ sur chaque carte avec badge "Mon animation" pré-rempli.
+    - Accès Administrateur par mot de passe maître direct (`prosopopus2026`) débloquant la suppression immédiate en un clic sans popup bloqué.
 
 ## [2.3.1] - Raffinement UX du Graph Nodal, Connexions Magnétiques & Colliders Directs
 
