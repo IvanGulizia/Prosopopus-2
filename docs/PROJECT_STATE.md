@@ -22,7 +22,11 @@
    - Rich trigger suite: `click`, `double_click`, `pointer_down`, `pointer_up`, `hover_enter`, `hover_leave`, `scroll_down`, `scroll_up`, `scroll_scrub`, `key_press`, `delay`, `animation_end`.
    - Continuous scroll scrubbing: drive clips or pose morphs dynamically with the mouse wheel or touchpad.
    - Live Inspector panel for node and transition attributes (duration, easing curve, event parameters).
-4. **Settings & Toggles**:
+4. **Galerie Communautaire & Partage Cloud (Firebase Firestore Spark)**:
+   - Partage en un clic avec génération automatique de vignette et titre/pseudo.
+   - Galerie en ligne avec recherche, prévisualisation et chargement instantané dans l'éditeur.
+   - Modération intégrée : bouton de signalement pour les utilisateurs, et authentification Google modérateur (`gulizia.i@gmail.com`) avec suppression en direct.
+5. **Settings & Toggles**:
    - Dedicated "Mode Expert" section in Settings panel.
    - URL parameter support: `?mode=expert`.
    - Complete parity in standalone player runtime (`src/player.ts` & `public/prosopopus-player.js`).

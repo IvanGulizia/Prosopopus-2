@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.4.0] - Galerie Communautaire Cloud & Partage d'Animations (Firebase Spark Gratuit)
+
+### Added
+- **Base de Données Firestore Serverless & Règles Durcies** :
+  - Intégration de Firebase Firestore (plan Spark 100% gratuit, sans mise en veille automatique).
+  - Règles de sécurité Firestore vérifiées et déployées (`firestore.rules`) protégeant les données contre toute écriture malveillante ou altération.
+- **Partage en 1 Clic (`ShareModal.tsx`)** :
+  - Bouton "Partager" dans la barre d'outils.
+  - Saisie du titre et pseudo de l'artiste (mémorisé en local).
+  - Capture automatique et optimisée d'une vignette du dessin via Canvas `toDataURL`.
+  - Publication instantanée dans la collection Firestore `/creations`.
+- **Galerie Communautaire (`GalleryModal.tsx`)** :
+  - Bouton "Galerie" dans la barre d'outils avec affichage en grille responsive.
+  - Recherche en direct par titre ou artiste.
+  - Bouton "Ouvrir" permettant de charger n'importe quelle animation de la communauté directement dans Prosopopus pour la jouer ou la modifier.
+  - Système de signalement communautaire (🚩) avec masquage automatique en cas d'abus.
+  - Espace modérateur avec connexion Google pour l'administrateur (`gulizia.i@gmail.com`) avec suppression directe (🗑️).
+
 ## [2.3.1] - Raffinement UX du Graph Nodal, Connexions Magnétiques & Colliders Directs
 
 ### Added

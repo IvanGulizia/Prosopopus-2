@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'gulizia.i@gmail.com' && request.auth.token.email_verified == true;
+    }
+
+    function isValidCreation(data) {
+      return data.keys().hasAll(['title', 'authorName', 'projectJson', 'reportCount', 'createdAt'])
+        && data.keys().size() <= 6
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 100
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 50
+        && data.projectJson is string && data.projectJson.size() <= 900000
+        && (!('thumbnail' in data) || (data.thumbnail is string && data.thumbnail.size() <= 150000))
+        && data.reportCount == 0
+        && data.createdAt == request.time;
+    }
+
+    match /creations/{creationId} {
+      // Anyone can browse creations; filtered out if flagged 3+ times unless admin
+      allow get: if true;
+      allow list: if resource.data.reportCount < 3 || isAdmin();
+
+      // Anyone can share their creation without authentication
+      allow create: if isValidId(creationId) && isValidCreation(incoming());
+
+      // Anyone can flag/report (+1 to reportCount) or admin can update
+      allow update: if (
+        isValidId(creationId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['reportCount']) &&
+        incoming().reportCount == existing().reportCount + 1 &&
+        incoming().title == existing().title &&
+        incoming().authorName == existing().authorName &&
+        incoming().projectJson == existing().projectJson &&
+        incoming().createdAt == existing().createdAt
+      ) || isAdmin();
+
+      // Only moderator admin can delete
+      allow delete: if isAdmin();
+    }
+  }
+}

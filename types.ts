@@ -327,6 +327,8 @@ export interface UIState {
   isExporting: boolean;
   exportFileName: string;
   isDebugMenuOpen: boolean;
+  isGalleryOpen: boolean;
+  isShareOpen: boolean;
   
   // Mode Expert & Timeline Panels
   expertModeEnabled: boolean; // Master toggle for Expert Mode

@@ -7,10 +7,12 @@ import { DebugMenu } from './components/DebugMenu';
 import { Timeline } from './components/Timeline';
 import { InteractionsPanel } from './components/InteractionsPanel';
 import { StateMachineGraph } from './components/StateMachineGraph';
+import { GalleryModal } from './components/GalleryModal';
+import { ShareModal } from './components/ShareModal';
 import { useStore } from './store/useStore';
 
 function App() {
-  const { ui, setMode, toggleDebugMenu } = useStore();
+  const { ui, setMode, toggleDebugMenu, toggleGallery, toggleShareModal } = useStore();
   const { theme } = ui;
   
   // Handle Keyboard shortcuts: 'h' for Debug Menu, Space for Play/Edit mode toggle
@@ -79,6 +81,18 @@ function App() {
 
       {/* Debug Menu */}
       <DebugMenu />
+
+      {/* Community Gallery & Share Modals */}
+      <GalleryModal 
+        isOpen={ui.isGalleryOpen} 
+        onClose={() => toggleGallery(false)} 
+        onOpenShare={() => toggleShareModal(true)} 
+      />
+      <ShareModal 
+        isOpen={ui.isShareOpen} 
+        onClose={() => toggleShareModal(false)} 
+        onOpenGallery={() => toggleGallery(true)} 
+      />
       
       {/* Footer / Status Bar */}
       {isEditMode && (

@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "Creation": {
+      "title": "Creation",
+      "description": "A shared animation project published to the community gallery",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The title of the animation",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Pseudonym of the creator",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "projectJson": {
+          "type": "string",
+          "description": "Serialized Prosopopus project JSON",
+          "maxLength": 900000
+        },
+        "thumbnail": {
+          "type": "string",
+          "description": "Thumbnail preview data URL",
+          "maxLength": 150000
+        },
+        "reportCount": {
+          "type": "number",
+          "description": "Number of user flags / reports"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation"
+        }
+      },
+      "required": ["title", "authorName", "projectJson", "reportCount", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/creations/{creationId}": {
+      "schema": "Creation",
+      "description": "Public community gallery of shared animations"
+    }
+  }
+}

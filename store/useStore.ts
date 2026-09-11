@@ -85,6 +85,8 @@ interface StoreState {
   loadProject: (project: Project) => void;
 
   toggleSettings: () => void;
+  toggleGallery: (open?: boolean) => void;
+  toggleShareModal: (open?: boolean) => void;
   toggleLayerPanel: () => void;
   closeAllPanels: () => void; // Used for clicking outside
 
@@ -394,6 +396,8 @@ export const useStore = create<StoreState>((set, get) => ({
   })),
 
   toggleSettings: () => set((state) => ({ ui: { ...state.ui, isSettingsOpen: !state.ui.isSettingsOpen, isLayerPanelOpen: false, isDebugMenuOpen: false } })),
+  toggleGallery: (open) => set((state) => ({ ui: { ...state.ui, isGalleryOpen: open !== undefined ? open : !state.ui.isGalleryOpen, isShareOpen: false } })),
+  toggleShareModal: (open) => set((state) => ({ ui: { ...state.ui, isShareOpen: open !== undefined ? open : !state.ui.isShareOpen } })),
   toggleLayerPanel: () => set((state) => ({ ui: { ...state.ui, isLayerPanelOpen: !state.ui.isLayerPanelOpen, isSettingsOpen: false, isDebugMenuOpen: false } })),
   toggleDebugMenu: () => set((state) => ({ ui: { ...state.ui, isDebugMenuOpen: !state.ui.isDebugMenuOpen, isSettingsOpen: false } })),
   setThemeColor: (key, color) => set((state) => ({ ui: { ...state.ui, theme: { ...state.ui.theme, [key]: color } } })),

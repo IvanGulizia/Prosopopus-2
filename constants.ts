@@ -131,6 +131,8 @@ export const INITIAL_UI_STATE: UIState = {
   isExporting: false,
   exportFileName: 'my-project',
   isDebugMenuOpen: false,
+  isGalleryOpen: false,
+  isShareOpen: false,
 
   // Mode Expert & Timelines
   expertModeEnabled: false,
