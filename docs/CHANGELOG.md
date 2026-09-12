@@ -1,5 +1,54 @@
 # Changelog
 
+## [2.6.0] - Calques Composites (Comp) & Gestionnaire de Sous-Calques Rétractables
+
+### Added
+- **Nouveau Type de Calque Composite (`comp`)** :
+  - Permet d'accumuler plusieurs traits, formes et polylignes au sein d'un même calque sans que les nouveaux tracés n'écrasent les précédents (contrairement au calque matrice classique qui isole un tracé unique).
+  - Chaque tracé ou forme possède son propre identifiant persistant, son index ordonné et son nom éditable.
+  - Basculement direct du type de calque via le badge du panneau des calques : `MTX` (Matrice classique), `COMP` (Composite multi-tracés), `REP` (Repère statique).
+  - Bouton rapide `+ COMP` dans l'en-tête du panneau des calques pour instancier un calque composite en un clic.
+- **Sous-Calques Rétractables dans le Panneau des Calques** :
+  - Volet déroulant accordéon avec flèche chevron, **rétracté et fermé par défaut** pour préserver la clarté visuelle.
+  - Index séquentiels clairs (`#1`, `#2`, ...) et nom du sous-calque modifiable en ligne par double-clic.
+  - Icône œil pour masquer ou afficher individuellement chaque sous-calque/tracé (`toggleStrokeVisibility`).
+  - Bouton de suppression individuelle (`deleteStrokeFromLayer`).
+  - Indicateur d'état dynamique (`non posé`) signalant les tracés déclarés dans un état mais pas encore dessinés sur l'état en cours.
+  - Sélection directe en un clic sur le sous-calque pour l'activer sur le canevas et lui assigner sa pose sur l'état courant.
+- **Moteur de Rendu Multi-Tracés Interpolé (`Canvas.tsx`)** :
+  - Interpolation vectorielle simultanée de l'ensemble des sous-tracés visibles d'un calque `comp` entre les états de la matrice spatiale ou temporelle.
+  - Respect strict de la visibilité des sous-tracés au rendu et lors des tests de sélection / pointage.
+
+## [2.5.0] - Galerie Communautaire 2.0 : Préviews Interactives, Bento Box, Likes, Featured & URL Dédiée
+
+### Added
+- **Design Grand Format & Bento Box Masonry** :
+  - Fenêtre élargie immersive (`max-w-7xl`, `92vh`) avec disposition adaptative en colonnes Masonry (Pinterest/Dribbble style) adaptée aux formats de chaque création (16:9, carré, vertical).
+  - Éléments "À la une" (Featured) mis en valeur avec contours dorés et badge distinctif.
+- **Prévisualisation Interactive en Direct (`InteractiveCardPreview.tsx`)** :
+  - Au survol d'une carte, un canvas interactif ultra-léger s'anime à 60 FPS propulsé par le moteur `ProsopopusPlayer`.
+  - Suivi interactif des axes du curseur et lecture des boucles d'animation directement sur la miniature sans recharger le projet.
+  - Bouton Play/Pause discret pour un contrôle tactile sur mobile/tablette.
+- **Système d'Upvote / Likes Instantané** :
+  - Bouton cœur `Heart` sur chaque carte avec compteur de votes en direct.
+  - Mise à jour optimiste et persistance locale des créations aimées (`prosopopus_liked_ids`).
+- **Section & Sélection "À la une" (Featured)** :
+  - En Mode Admin, bouton étoile ⭐ sur chaque carte permettant d'épingler/retirer une création de la sélection officielle.
+  - Onglet dédié "À la une" accessible à tous les utilisateurs.
+- **Tri & Filtrage Multi-Onglets** :
+  - **Récents** : tri chronologique inversé.
+  - **Populaires** : tri par nombre de likes décroissant.
+  - **À la une** : créations sélectionnées par l'administrateur.
+  - **Mes créations** : projets publiés depuis ce navigateur.
+- **Routage URL & Liens Directs Partageables** :
+  - URL dédiée pour la galerie : `?view=gallery` ou `#gallery` ouvre immédiatement la galerie au chargement.
+  - Bouton "Partager la galerie" dans l'en-tête copiant le lien direct vers le flux.
+  - Bouton lien direct (🔗) sur chaque carte : `?project=<id>` qui charge instantanément l'animation sélectionnée dans l'éditeur Prosopopus.
+- **Raffinements UX Galerie** :
+  - Suppression de l'effet de soulèvement (`translate-y`) et de l'ombre au survol des cartes pour une interaction parfaitement stable.
+  - Suppression des infobulles/tooltips natifs (`title`) affichant le nom du fichier.
+  - Activation automatique du **Mode Play** lors de l'ouverture d'un projet depuis la galerie ou via un lien URL partagé.
+
 ## [2.4.0] - Galerie Communautaire Cloud & Partage d'Animations (Firebase Spark Gratuit)
 
 ### Added

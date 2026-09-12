@@ -1,6 +1,6 @@
 // store/useStore.ts
 import { create } from 'zustand';
-import { Project, UIState, ToolType, Axis, Layer, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig, AnimationTimeline, TimelineKeyframeMarker, EasingType, LoopMode, LayerInteraction, InteractionTrigger, InteractionAction, LayerDriverMode, LayerTimelineTrack, LayerTimelineKeyframe, InteractionCollider, StateMachine, StateNode, StateTransition, StateNodeType, StateTransitionTrigger } from '../types';
+import { Project, UIState, ToolType, Axis, Layer, LayerType, Keyframe, Point, Stroke, LayerState, BlendMode, UIMode, InterpolationMode, InterpolationStrategy, StyleProps, Theme, SymmetryType, SymmetryTarget, LayerSymmetryConfig, OnionSkinMode, InactiveLayerMode, PlayModeCursorType, PlayModeCursorShape, CornerRadii, ShapeType, ShapeConfig, AnimationTimeline, TimelineKeyframeMarker, EasingType, LoopMode, LayerInteraction, InteractionTrigger, InteractionAction, LayerDriverMode, LayerTimelineTrack, LayerTimelineKeyframe, InteractionCollider, StateMachine, StateNode, StateTransition, StateNodeType, StateTransitionTrigger } from '../types';
 import { DEFAULT_PROJECT, INITIAL_UI_STATE, DEFAULT_LAYER, DEFAULT_KEYFRAME, DEFAULT_ANIMATION } from '../constants';
 import { simplifyPoints, distance, chaikinSmooth, simplifyCollinearPoints, getSymmetricPoints, getUnifiedSymmetricContour, generateShapePoints } from '../utils/math';
 import { getOrCreateDefaultStateMachine } from '../utils/stateMachine';
@@ -193,6 +193,12 @@ interface StoreState {
   toggleLayerVisibility: (layerId: string) => void;
   toggleLayerLock: (layerId: string) => void;
   toggleLayerGuideMode: (layerId: string) => void;
+  setLayerType: (layerId: string, type: LayerType) => void;
+  addCompLayer: () => void;
+  renameStroke: (layerId: string, strokeId: string, name: string) => void;
+  toggleStrokeVisibility: (layerId: string, strokeId: string) => void;
+  deleteStrokeFromLayer: (layerId: string, strokeId: string) => void;
+  reorderStrokesInLayer: (layerId: string, fromIndex: number, toIndex: number) => void;
   setLayerBlendMode: (layerId: string, mode: BlendMode) => void;
   setLayerInterpolationMode: (layerId: string, mode: InterpolationMode) => void;
   setLayerCornerRoundness: (layerId: string, roundness: number, applyToAllStates?: boolean) => void;
@@ -1416,16 +1422,80 @@ export const useStore = create<StoreState>((set, get) => ({
     }
 
     const isGuideLayer = layer?.isGuide === true;
-    const strokeId = isGuideLayer 
-      ? `guide-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
-      : `stroke-${selectedLayerId}-unique`;
+    const isCompLayer = layer?.type === 'comp';
+
+    const currentKf = keyframes.find(k => k.id === targetKeyframeId);
+    const existingLayerState = currentKf?.layerStates.find(ls => ls.layerId === selectedLayerId);
+    const currentStrokes = existingLayerState?.strokes || [];
+
+    let strokeId: string;
+    let strokeName: string | undefined;
+
+    if (isCompLayer) {
+      const selectedSlotId = state.ui.selectedStrokeId;
+      const alreadyPosedInCurrentKf = selectedSlotId ? currentStrokes.some(s => s.id === selectedSlotId && s.points && s.points.length > 0) : false;
+
+      let targetSlotStroke: Stroke | undefined;
+      // Only attach to an existing slot if user explicitly selected an unposed slot from another keyframe
+      if (selectedSlotId && !alreadyPosedInCurrentKf) {
+        for (const k of keyframes) {
+          const ls = k.layerStates.find(l => l.layerId === selectedLayerId);
+          const found = ls?.strokes.find(s => s.id === selectedSlotId);
+          if (found) { targetSlotStroke = found; break; }
+        }
+      } else if (!alreadyPosedInCurrentKf) {
+        // Auto-pair based on index across all keyframes
+        const allUniqueStrokes: Stroke[] = [];
+        const seenIds = new Set<string>();
+        for (const k of keyframes) {
+            const ls = k.layerStates.find(l => l.layerId === selectedLayerId);
+            if (ls) {
+                for (const s of ls.strokes) {
+                    if (!seenIds.has(s.id)) {
+                        seenIds.add(s.id);
+                        allUniqueStrokes.push(s);
+                    }
+                }
+            }
+        }
+        
+        // Find the first slot that is NOT filled in the current keyframe
+        for (const candidateStroke of allUniqueStrokes) {
+            const matchInCurrent = currentStrokes.find(s => s.id === candidateStroke.id);
+            if (!matchInCurrent || !matchInCurrent.points || matchInCurrent.points.length === 0) {
+                targetSlotStroke = candidateStroke;
+                break;
+            }
+        }
+      }
+
+      const filledStrokesCountForName = currentStrokes.filter(s => s.points && s.points.length > 0).length;
+      const shapeLabel = config.type === 'rectangle' ? 'Rectangle' : config.type === 'ellipse' ? 'Ellipse' : 'Polygone';
+
+      if (targetSlotStroke) {
+        strokeId = targetSlotStroke.id;
+        strokeName = targetSlotStroke.name || `${shapeLabel} ${filledStrokesCountForName + 1}`;
+      } else {
+        strokeId = `comp-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        strokeName = `${shapeLabel} ${filledStrokesCountForName + 1}`;
+      }
+    } else if (isGuideLayer) {
+      strokeId = `guide-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      strokeName = `Guide ${currentStrokes.length + 1}`;
+    } else {
+      strokeId = `stroke-${selectedLayerId}-unique`;
+      strokeName = `Forme 1`;
+    }
 
     const newStroke: Stroke = {
       id: strokeId,
+      name: strokeName,
       points,
       closed: true,
       style: Object.keys(styleOverride).length > 0 ? styleOverride : undefined,
-      shapeConfig: config
+      shapeConfig: config,
+      visible: true,
+      locked: false
     };
 
     let finalLayers = state.project.layers;
@@ -1463,6 +1533,49 @@ export const useStore = create<StoreState>((set, get) => ({
           return { ...kf, layerStates: newLayerStates };
         }
         return kf;
+      });
+    } else if (isCompLayer) {
+      newKeyframes = keyframes.map(kf => {
+        let newLayerStates = [...kf.layerStates];
+        const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+        
+        if (kf.id === targetKeyframeId) {
+          // Add or update the actual drawn stroke in the current keyframe
+          if (existingLayerStateIndex >= 0) {
+            const existingLS = newLayerStates[existingLayerStateIndex];
+            const matchIndex = existingLS.strokes.findIndex(s => s.id === strokeId);
+            let updatedStrokes: Stroke[];
+            if (matchIndex >= 0) {
+              updatedStrokes = existingLS.strokes.map(s => s.id === strokeId ? newStroke : s);
+            } else {
+              updatedStrokes = [...existingLS.strokes, newStroke];
+            }
+            newLayerStates[existingLayerStateIndex] = { ...existingLS, strokes: updatedStrokes };
+          } else {
+            newLayerStates.push({ layerId: selectedLayerId, strokes: [newStroke] });
+          }
+        } else {
+          // Sync empty slot into other keyframes if this is a newly created slot
+          let isExistingSlot = false;
+          for (const k of keyframes) {
+              const ls = k.layerStates.find(l => l.layerId === selectedLayerId);
+              if (ls?.strokes.find(s => s.id === strokeId)) {
+                  isExistingSlot = true;
+                  break;
+              }
+          }
+
+          if (!isExistingSlot) {
+             const emptyStroke: Stroke = { ...newStroke, points: [] };
+             if (existingLayerStateIndex >= 0) {
+                 const existingLS = newLayerStates[existingLayerStateIndex];
+                 newLayerStates[existingLayerStateIndex] = { ...existingLS, strokes: [...existingLS.strokes, emptyStroke] };
+             } else {
+                 newLayerStates.push({ layerId: selectedLayerId, strokes: [emptyStroke] });
+             }
+          }
+        }
+        return { ...kf, layerStates: newLayerStates };
       });
     } else {
       newKeyframes = keyframes.map(kf => {
@@ -1520,8 +1633,12 @@ export const useStore = create<StoreState>((set, get) => ({
               const currentStrokes = existing.strokes || [];
               const matchIdx = currentStrokes.findIndex(s => s.id === strokeId);
               let newStrokes: Stroke[];
-              if (isGuideLayer) {
-                newStrokes = [...currentStrokes, newStroke];
+              if (isGuideLayer || isCompLayer) {
+                if (matchIdx >= 0) {
+                  newStrokes = currentStrokes.map(s => s.id === strokeId ? newStroke : s);
+                } else {
+                  newStrokes = [...currentStrokes, newStroke];
+                }
               } else if (matchIdx >= 0) {
                 newStrokes = currentStrokes.map(s => s.id === strokeId ? newStroke : s);
               } else {
@@ -1532,7 +1649,7 @@ export const useStore = create<StoreState>((set, get) => ({
               createdTlKeyframeId = `kf-tl-${Date.now()}`;
               const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
               const baseStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, []);
-              const newStrokes = isGuideLayer
+              const newStrokes = (isGuideLayer || isCompLayer)
                 ? [...baseStrokes, newStroke]
                 : (baseStrokes.some(s => s.id === strokeId)
                     ? baseStrokes.map(s => s.id === strokeId ? newStroke : s)
@@ -1552,7 +1669,7 @@ export const useStore = create<StoreState>((set, get) => ({
             createdTlKeyframeId = `kf-tl-${Date.now()}`;
             const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
             const baseStrokes = getTimelineStrokesForTime(undefined, targetTime, targetLayer, anim, []);
-            const newStrokes = isGuideLayer ? [...baseStrokes, newStroke] : [newStroke];
+            const newStrokes = (isGuideLayer || isCompLayer) ? [...baseStrokes, newStroke] : [newStroke];
             const newTlKf: LayerTimelineKeyframe = {
               id: createdTlKeyframeId,
               time: targetTime,
@@ -1585,9 +1702,17 @@ export const useStore = create<StoreState>((set, get) => ({
           const currentLs = n.poseData?.layerStates || [];
           const existingLsIdx = currentLs.findIndex(ls => ls.layerId === selectedLayerId);
           let newLs: LayerState[];
-          if (isGuideLayer) {
+          if (isGuideLayer || isCompLayer) {
             if (existingLsIdx >= 0) {
-              newLs = currentLs.map((ls, idx) => idx === existingLsIdx ? { ...ls, strokes: [...ls.strokes, newStroke] } : ls);
+              const currentStrokes = currentLs[existingLsIdx].strokes || [];
+              const matchIdx = currentStrokes.findIndex(s => s.id === strokeId);
+              let updatedStrokes: Stroke[];
+              if (matchIdx >= 0) {
+                updatedStrokes = currentStrokes.map(s => s.id === strokeId ? newStroke : s);
+              } else {
+                updatedStrokes = [...currentStrokes, newStroke];
+              }
+              newLs = currentLs.map((ls, idx) => idx === existingLsIdx ? { ...ls, strokes: updatedStrokes } : ls);
             } else {
               newLs = [...currentLs, { layerId: selectedLayerId, strokes: [newStroke] }];
             }
@@ -2116,6 +2241,7 @@ export const useStore = create<StoreState>((set, get) => ({
       if (l.id === layerId) {
         return {
           ...l,
+          type: newIsGuide ? 'guide' as LayerType : ('matrix' as LayerType),
           isGuide: newIsGuide,
           guideStrokes: newIsGuide ? (l.guideStrokes && l.guideStrokes.length > 0 ? l.guideStrokes : existingStrokes) : undefined
         };
@@ -2125,6 +2251,149 @@ export const useStore = create<StoreState>((set, get) => ({
 
     return {
       project: { ...state.project, layers: updatedLayers },
+      history: { past, future: [] }
+    };
+  }),
+
+  setLayerType: (layerId, type) => set((state) => {
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    const newKeyframes = state.project.keyframes.map(kf => ({
+      ...kf,
+      layerStates: kf.layerStates.map(ls => {
+        if (ls.layerId !== layerId) return ls;
+        if (type === 'comp') {
+          return {
+            ...ls,
+            strokes: ls.strokes.map((s, idx) => ({
+              ...s,
+              name: s.name || `Tracé ${idx + 1}`
+            }))
+          };
+        }
+        return ls;
+      })
+    }));
+
+    return {
+      project: {
+        ...state.project,
+        layers: state.project.layers.map(l => l.id === layerId ? {
+          ...l,
+          type,
+          isGuide: type === 'guide'
+        } : l),
+        keyframes: newKeyframes
+      },
+      history: { past, future: [] }
+    };
+  }),
+
+  addCompLayer: () => set((state) => {
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    const newId = `layer-${Date.now()}`;
+    const newLayer: Layer = {
+      id: newId,
+      name: `Comp ${state.project.layers.length + 1}`,
+      type: 'comp',
+      visible: true,
+      locked: false,
+      blendMode: 'normal',
+      opacity: 1,
+      interpolationMode: 'resample'
+    };
+    return {
+      project: { ...state.project, layers: [...state.project.layers, newLayer] },
+      ui: { ...state.ui, selectedLayerId: newId, selectedTool: 'pen', selectedStrokeId: null },
+      history: { past, future: [] }
+    };
+  }),
+
+  renameStroke: (layerId, strokeId, name) => set((state) => {
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    let updatedLayers = state.project.layers;
+    if (targetLayer?.guideStrokes) {
+      updatedLayers = updatedLayers.map(l => l.id === layerId ? {
+        ...l,
+        guideStrokes: l.guideStrokes?.map(s => s.id === strokeId ? { ...s, name } : s)
+      } : l);
+    }
+    const newKeyframes = state.project.keyframes.map(kf => ({
+      ...kf,
+      layerStates: kf.layerStates.map(ls => ls.layerId === layerId ? {
+        ...ls,
+        strokes: ls.strokes.map(s => s.id === strokeId ? { ...s, name } : s)
+      } : ls)
+    }));
+    return {
+      project: { ...state.project, layers: updatedLayers, keyframes: newKeyframes },
+      history: { past, future: [] }
+    };
+  }),
+
+  toggleStrokeVisibility: (layerId, strokeId) => set((state) => {
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    let updatedLayers = state.project.layers;
+    if (targetLayer?.guideStrokes) {
+      updatedLayers = updatedLayers.map(l => l.id === layerId ? {
+        ...l,
+        guideStrokes: l.guideStrokes?.map(s => s.id === strokeId ? { ...s, visible: !(s.visible ?? true) } : s)
+      } : l);
+    }
+    const newKeyframes = state.project.keyframes.map(kf => ({
+      ...kf,
+      layerStates: kf.layerStates.map(ls => ls.layerId === layerId ? {
+        ...ls,
+        strokes: ls.strokes.map(s => s.id === strokeId ? { ...s, visible: !(s.visible ?? true) } : s)
+      } : ls)
+    }));
+    return {
+      project: { ...state.project, layers: updatedLayers, keyframes: newKeyframes },
+      history: { past, future: [] }
+    };
+  }),
+
+  deleteStrokeFromLayer: (layerId, strokeId) => set((state) => {
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    const targetLayer = state.project.layers.find(l => l.id === layerId);
+    let updatedLayers = state.project.layers;
+    if (targetLayer?.guideStrokes) {
+      updatedLayers = updatedLayers.map(l => l.id === layerId ? {
+        ...l,
+        guideStrokes: (l.guideStrokes || []).filter(s => s.id !== strokeId)
+      } : l);
+    }
+    const newKeyframes = state.project.keyframes.map(kf => ({
+      ...kf,
+      layerStates: kf.layerStates.map(ls => ls.layerId === layerId ? {
+        ...ls,
+        strokes: ls.strokes.filter(s => s.id !== strokeId)
+      } : ls)
+    }));
+    const newSelectedStrokeId = state.ui.selectedStrokeId === strokeId ? null : state.ui.selectedStrokeId;
+    return {
+      project: { ...state.project, layers: updatedLayers, keyframes: newKeyframes },
+      ui: { ...state.ui, selectedStrokeId: newSelectedStrokeId },
+      history: { past, future: [] }
+    };
+  }),
+
+  reorderStrokesInLayer: (layerId, fromIndex, toIndex) => set((state) => {
+    if (fromIndex === toIndex) return state;
+    const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+    const newKeyframes = state.project.keyframes.map(kf => ({
+      ...kf,
+      layerStates: kf.layerStates.map(ls => {
+        if (ls.layerId !== layerId || fromIndex >= ls.strokes.length || toIndex >= ls.strokes.length) return ls;
+        const newStrokes = [...ls.strokes];
+        const [moved] = newStrokes.splice(fromIndex, 1);
+        newStrokes.splice(toIndex, 0, moved);
+        return { ...ls, strokes: newStrokes };
+      })
+    }));
+    return {
+      project: { ...state.project, keyframes: newKeyframes },
       history: { past, future: [] }
     };
   }),
@@ -2517,15 +2786,78 @@ export const useStore = create<StoreState>((set, get) => ({
     }
 
     const isGuideLayer = layer?.isGuide === true;
-    const strokeId = isGuideLayer 
-      ? `guide-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
-      : `stroke-${selectedLayerId}-unique`;
+    const isCompLayer = layer?.type === 'comp';
+
+    const currentKf = keyframes.find(k => k.id === targetKeyframeId);
+    const existingLayerState = currentKf?.layerStates.find(ls => ls.layerId === selectedLayerId);
+    const currentStrokes = existingLayerState?.strokes || [];
+
+    let strokeId: string;
+    let strokeName: string | undefined;
+
+    if (isCompLayer) {
+      const selectedSlotId = state.ui.selectedStrokeId;
+      const alreadyPosedInCurrentKf = selectedSlotId ? currentStrokes.some(s => s.id === selectedSlotId && s.points && s.points.length > 0) : false;
+
+      let targetSlotStroke: Stroke | undefined;
+      // Only attach to an existing slot if user explicitly selected an unposed slot from another keyframe
+      if (selectedSlotId && !alreadyPosedInCurrentKf) {
+        for (const k of keyframes) {
+          const ls = k.layerStates.find(l => l.layerId === selectedLayerId);
+          const found = ls?.strokes.find(s => s.id === selectedSlotId);
+          if (found) { targetSlotStroke = found; break; }
+        }
+      } else if (!alreadyPosedInCurrentKf) {
+        // Auto-pair based on index across all keyframes
+        const allUniqueStrokes: Stroke[] = [];
+        const seenIds = new Set<string>();
+        for (const k of keyframes) {
+            const ls = k.layerStates.find(l => l.layerId === selectedLayerId);
+            if (ls) {
+                for (const s of ls.strokes) {
+                    if (!seenIds.has(s.id)) {
+                        seenIds.add(s.id);
+                        allUniqueStrokes.push(s);
+                    }
+                }
+            }
+        }
+        
+        // Find the first slot that is NOT filled in the current keyframe
+        for (const candidateStroke of allUniqueStrokes) {
+            const matchInCurrent = currentStrokes.find(s => s.id === candidateStroke.id);
+            if (!matchInCurrent || !matchInCurrent.points || matchInCurrent.points.length === 0) {
+                targetSlotStroke = candidateStroke;
+                break;
+            }
+        }
+      }
+
+      const filledStrokesCountForName = currentStrokes.filter(s => s.points && s.points.length > 0).length;
+
+      if (targetSlotStroke) {
+        strokeId = targetSlotStroke.id;
+        strokeName = targetSlotStroke.name || `Tracé ${filledStrokesCountForName + 1}`;
+      } else {
+        strokeId = `comp-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        strokeName = `Tracé ${filledStrokesCountForName + 1}`;
+      }
+    } else if (isGuideLayer) {
+      strokeId = `guide-stroke-${selectedLayerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      strokeName = `Guide ${currentStrokes.length + 1}`;
+    } else {
+      strokeId = `stroke-${selectedLayerId}-unique`;
+      strokeName = `Tracé 1`;
+    }
 
     const newStroke: Stroke = {
       id: strokeId,
+      name: strokeName,
       points,
       closed: closed ?? false,
-      style: Object.keys(styleOverride).length > 0 ? styleOverride : undefined
+      style: Object.keys(styleOverride).length > 0 ? styleOverride : undefined,
+      visible: true,
+      locked: false
     };
 
     let finalLayers = updatedLayers;
@@ -2563,6 +2895,47 @@ export const useStore = create<StoreState>((set, get) => ({
           return { ...kf, layerStates: newLayerStates };
         }
         return kf;
+      });
+    } else if (isCompLayer) {
+      newKeyframes = keyframes.map(kf => {
+        let newLayerStates = [...kf.layerStates];
+        const existingLayerStateIndex = newLayerStates.findIndex(ls => ls.layerId === selectedLayerId);
+        
+        if (kf.id === targetKeyframeId) {
+          if (existingLayerStateIndex >= 0) {
+            const existingLS = newLayerStates[existingLayerStateIndex];
+            const matchIndex = existingLS.strokes.findIndex(s => s.id === strokeId);
+            let updatedStrokes: Stroke[];
+            if (matchIndex >= 0) {
+              updatedStrokes = existingLS.strokes.map(s => s.id === strokeId ? newStroke : s);
+            } else {
+              updatedStrokes = [...existingLS.strokes, newStroke];
+            }
+            newLayerStates[existingLayerStateIndex] = { ...existingLS, strokes: updatedStrokes };
+          } else {
+            newLayerStates.push({ layerId: selectedLayerId, strokes: [newStroke] });
+          }
+        } else {
+          let isExistingSlot = false;
+          for (const k of keyframes) {
+              const ls = k.layerStates.find(l => l.layerId === selectedLayerId);
+              if (ls?.strokes.find(s => s.id === strokeId)) {
+                  isExistingSlot = true;
+                  break;
+              }
+          }
+
+          if (!isExistingSlot) {
+             const emptyStroke: Stroke = { ...newStroke, points: [] };
+             if (existingLayerStateIndex >= 0) {
+                 const existingLS = newLayerStates[existingLayerStateIndex];
+                 newLayerStates[existingLayerStateIndex] = { ...existingLS, strokes: [...existingLS.strokes, emptyStroke] };
+             } else {
+                 newLayerStates.push({ layerId: selectedLayerId, strokes: [emptyStroke] });
+             }
+          }
+        }
+        return { ...kf, layerStates: newLayerStates };
       });
     } else {
       newKeyframes = keyframes.map(kf => {
@@ -2612,14 +2985,27 @@ export const useStore = create<StoreState>((set, get) => ({
             if (existingKfIndex >= 0) {
               const existing = track.keyframes[existingKfIndex];
               createdTlKeyframeId = existing.id;
-              const newStrokes = isGuideLayer ? [...(existing.strokes || []), newStroke] : [newStroke];
+              const currentStrokes = existing.strokes || [];
+              const matchIdx = currentStrokes.findIndex(s => s.id === strokeId);
+              let newStrokes: Stroke[];
+              if (isGuideLayer || isCompLayer) {
+                if (matchIdx >= 0) {
+                  newStrokes = currentStrokes.map(s => s.id === strokeId ? newStroke : s);
+                } else {
+                  newStrokes = [...currentStrokes, newStroke];
+                }
+              } else if (matchIdx >= 0) {
+                newStrokes = currentStrokes.map(s => s.id === strokeId ? newStroke : s);
+              } else {
+                newStrokes = [newStroke];
+              }
               updatedKf = track.keyframes.map((k, idx) => idx === existingKfIndex ? { ...k, strokes: newStrokes } : k);
             } else {
               createdTlKeyframeId = `kf-tl-${Date.now()}`;
               const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
               const baseStrokes = getTimelineStrokesForTime(track, targetTime, targetLayer, anim, []);
-              const newStrokes = isGuideLayer
-                ? [...baseStrokes, newStroke]
+              const newStrokes = (isGuideLayer || isCompLayer)
+                ? (baseStrokes.some(s => s.id === strokeId) ? baseStrokes.map(s => s.id === strokeId ? newStroke : s) : [...baseStrokes, newStroke])
                 : (baseStrokes.some(s => s.id === strokeId)
                     ? baseStrokes.map(s => s.id === strokeId ? newStroke : s)
                     : [newStroke]);
@@ -2638,7 +3024,7 @@ export const useStore = create<StoreState>((set, get) => ({
             createdTlKeyframeId = `kf-tl-${Date.now()}`;
             const targetLayer = state.project.layers.find(l => l.id === selectedLayerId);
             const baseStrokes = getTimelineStrokesForTime(undefined, targetTime, targetLayer, anim, []);
-            const newStrokes = isGuideLayer ? [...baseStrokes, newStroke] : [newStroke];
+            const newStrokes = (isGuideLayer || isCompLayer) ? [...baseStrokes, newStroke] : [newStroke];
             const newTlKf: LayerTimelineKeyframe = {
               id: createdTlKeyframeId,
               time: targetTime,
@@ -2713,10 +3099,13 @@ export const useStore = create<StoreState>((set, get) => ({
               // Auto-Keyframe: create stroke inside this layerState
               strokes.push({
                 id: strokeId,
+                name: baseStroke?.name,
                 points: newPoints,
                 closed: baseStroke?.closed ?? false,
                 style: baseStroke?.style,
-                shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+                shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig,
+                visible: baseStroke?.visible ?? true,
+                locked: baseStroke?.locked ?? false
               });
             }
 
@@ -2731,10 +3120,13 @@ export const useStore = create<StoreState>((set, get) => ({
             layerId,
             strokes: [{
               id: strokeId,
+              name: baseStroke?.name,
               points: newPoints,
               closed: baseStroke?.closed ?? false,
               style: baseStroke?.style,
-              shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig
+              shapeConfig: shapeConfig !== undefined ? shapeConfig : baseStroke?.shapeConfig,
+              visible: baseStroke?.visible ?? true,
+              locked: baseStroke?.locked ?? false
             }]
           });
         }

@@ -84,16 +84,24 @@ export class ProsopopusPlayer {
   private lastTime: number = 0;
   private animationFrameId: number = 0;
   private isRunning: boolean = false;
+  private scopedToCanvas: boolean = false;
+  private resetOnLeave: boolean = false;
   
   // Event listener cleanup
   private cleanupListeners: (() => void) | null = null;
 
-  constructor(canvas: HTMLCanvasElement, project: Project) {
+  constructor(
+    canvas: HTMLCanvasElement, 
+    project: Project, 
+    options?: { scopedToCanvas?: boolean; resetOnLeave?: boolean }
+  ) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not get 2D rendering context for canvas');
     this.ctx = ctx;
     this.project = project;
+    this.scopedToCanvas = options?.scopedToCanvas ?? false;
+    this.resetOnLeave = options?.resetOnLeave ?? false;
 
     const settings = project.settings || {};
     const cursorType = settings.playModeCursor || 'default';
@@ -331,17 +339,47 @@ export class ProsopopusPlayer {
     };
     const onMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
 
-    this.canvas.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('pointermove', onPointerMove, { passive: true });
-    window.addEventListener('touchmove', onTouchMove, { passive: true });
-    window.addEventListener('mousemove', onMouseMove, { passive: true });
-
-    this.cleanupListeners = () => {
-      this.canvas.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('mousemove', onMouseMove);
+    const onPointerLeave = () => {
+      if (this.resetOnLeave) {
+        this.targetAxes['axis-x'] = 0.5;
+        this.targetAxes['axis-y'] = 0.5;
+      }
     };
+
+    if (this.scopedToCanvas) {
+      this.canvas.addEventListener('pointerdown', onPointerDown);
+      this.canvas.addEventListener('pointermove', onPointerMove);
+      this.canvas.addEventListener('pointerleave', onPointerLeave);
+      this.canvas.addEventListener('touchmove', onTouchMove, { passive: true });
+
+      this.cleanupListeners = () => {
+        this.canvas.removeEventListener('pointerdown', onPointerDown);
+        this.canvas.removeEventListener('pointermove', onPointerMove);
+        this.canvas.removeEventListener('pointerleave', onPointerLeave);
+        this.canvas.removeEventListener('touchmove', onTouchMove);
+      };
+    } else {
+      this.canvas.addEventListener('pointerdown', onPointerDown);
+      window.addEventListener('pointermove', onPointerMove, { passive: true });
+      window.addEventListener('touchmove', onTouchMove, { passive: true });
+      window.addEventListener('mousemove', onMouseMove, { passive: true });
+
+      this.cleanupListeners = () => {
+        this.canvas.removeEventListener('pointerdown', onPointerDown);
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('touchmove', onTouchMove);
+        window.removeEventListener('mousemove', onMouseMove);
+      };
+    }
+  }
+
+  public setDirectPointer(normX: number, normY: number) {
+    this.targetAxes['axis-x'] = Math.max(0, Math.min(1, normX));
+    this.targetAxes['axis-y'] = Math.max(0, Math.min(1, normY));
+  }
+
+  public renderFrame() {
+    this.render(0.016);
   }
 
   public start() {

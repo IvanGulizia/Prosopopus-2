@@ -105,6 +105,9 @@ export interface CommunityCreation {
   projectJson: string;
   thumbnail?: string;
   deletePasscode?: string;
+  likeCount: number;
+  featured?: boolean;
+  aspectRatio?: 'wide' | 'square' | 'portrait' | 'tall';
   reportCount: number;
   createdAt: any;
 }
@@ -144,7 +147,8 @@ export async function publishCreation(
   authorName: string, 
   project: Project, 
   thumbnail?: string,
-  deletePasscode?: string
+  deletePasscode?: string,
+  aspectRatio: 'wide' | 'square' | 'portrait' | 'tall' = 'wide'
 ): Promise<string> {
   const creationId = generateRandomId(20);
   const path = `creations/${creationId}`;
@@ -165,6 +169,9 @@ export async function publishCreation(
     authorName: authorName.trim().slice(0, 50) || 'Anonyme',
     projectJson: serialized,
     deletePasscode: cleanPasscode,
+    likeCount: 0,
+    featured: false,
+    aspectRatio,
     reportCount: 0,
     createdAt: serverTimestamp()
   };
@@ -186,7 +193,7 @@ export async function publishCreation(
 }
 
 // Fetch creations for the gallery
-export async function fetchCreations(maxItems = 50): Promise<CommunityCreation[]> {
+export async function fetchCreations(maxItems = 100): Promise<CommunityCreation[]> {
   const path = 'creations';
   try {
     let snap;
@@ -215,6 +222,9 @@ export async function fetchCreations(maxItems = 50): Promise<CommunityCreation[]
           projectJson: data.projectJson,
           thumbnail: data.thumbnail,
           deletePasscode: data.deletePasscode,
+          likeCount: typeof data.likeCount === 'number' ? data.likeCount : 0,
+          featured: Boolean(data.featured),
+          aspectRatio: data.aspectRatio || 'wide',
           reportCount: data.reportCount || 0,
           createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(),
         });
@@ -224,6 +234,58 @@ export async function fetchCreations(maxItems = 50): Promise<CommunityCreation[]
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
     return [];
+  }
+}
+
+// Fetch single creation by ID (for direct shareable link)
+export async function fetchCreationById(creationId: string): Promise<CommunityCreation | null> {
+  const path = `creations/${creationId}`;
+  try {
+    const docSnap = await getDoc(doc(db, 'creations', creationId));
+    if (!docSnap.exists()) return null;
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      title: data.title || 'Sans titre',
+      authorName: data.authorName || 'Artiste',
+      projectJson: data.projectJson,
+      thumbnail: data.thumbnail,
+      deletePasscode: data.deletePasscode,
+      likeCount: typeof data.likeCount === 'number' ? data.likeCount : 0,
+      featured: Boolean(data.featured),
+      aspectRatio: data.aspectRatio || 'wide',
+      reportCount: data.reportCount || 0,
+      createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(),
+    };
+  } catch (error) {
+    console.error('Error fetching creation by ID:', error);
+    return null;
+  }
+}
+
+// Upvote / Like toggle (+1 or -1)
+export async function toggleLikeCreation(creationId: string, isLiking: boolean): Promise<void> {
+  const path = `creations/${creationId}`;
+  try {
+    const docRef = doc(db, 'creations', creationId);
+    await updateDoc(docRef, {
+      likeCount: increment(isLiking ? 1 : -1)
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+// Toggle Featured (Admin only)
+export async function toggleFeaturedCreation(creationId: string, featured: boolean): Promise<void> {
+  const path = `creations/${creationId}`;
+  try {
+    const docRef = doc(db, 'creations', creationId);
+    await updateDoc(docRef, {
+      featured
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

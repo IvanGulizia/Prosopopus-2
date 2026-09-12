@@ -17,6 +17,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, onOpenG
   const [authorName, setAuthorName] = useState('');
   const [deletePasscode, setDeletePasscode] = useState('');
   const [thumbnail, setThumbnail] = useState<string>('');
+  const [detectedRatio, setDetectedRatio] = useState<'wide' | 'square' | 'portrait'>('wide');
   const [isPublishing, setIsPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
@@ -33,6 +34,13 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, onOpenG
       try {
         const canvas = document.querySelector('canvas');
         if (canvas) {
+          if (canvas.width > 0 && canvas.height > 0) {
+            const ar = canvas.width / canvas.height;
+            if (ar >= 1.3) setDetectedRatio('wide');
+            else if (ar <= 0.8) setDetectedRatio('portrait');
+            else setDetectedRatio('square');
+          }
+          
           // Create downscaled preview to fit safely in Firestore (max 150KB)
           const thumbCanvas = document.createElement('canvas');
           const maxDim = 320;
@@ -70,7 +78,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, onOpenG
         localStorage.setItem('prosopopus_author_name', authorName.trim());
       }
       
-      const id = await publishCreation(title, authorName, project, thumbnail, deletePasscode);
+      const id = await publishCreation(title, authorName, project, thumbnail, deletePasscode, detectedRatio);
       setSuccessId(id);
     } catch (err: any) {
       console.error(err);

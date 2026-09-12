@@ -12,8 +12,41 @@ import { ShareModal } from './components/ShareModal';
 import { useStore } from './store/useStore';
 
 function App() {
-  const { ui, setMode, toggleDebugMenu, toggleGallery, toggleShareModal } = useStore();
+  const { ui, setMode, toggleDebugMenu, toggleGallery, toggleShareModal, loadProject } = useStore();
   const { theme } = ui;
+
+  // Handle URL deep linking (?view=gallery, #gallery, and ?project=<id>)
+  useEffect(() => {
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
+
+      if (searchParams.get('view') === 'gallery' || hash === '#gallery') {
+        toggleGallery(true);
+      }
+
+      const projectId = searchParams.get('project');
+      if (projectId) {
+        import('./services/firebase').then(({ fetchCreationById }) => {
+          fetchCreationById(projectId).then(creation => {
+            if (creation && creation.projectJson) {
+              try {
+                const parsed = JSON.parse(creation.projectJson);
+                loadProject(parsed);
+                setMode('play');
+              } catch (e) {
+                console.error('Failed to parse shared project from URL:', e);
+              }
+            }
+          }).catch(err => {
+            console.error('Error fetching project from URL param:', err);
+          });
+        });
+      }
+    } catch (e) {
+      console.warn('URL parsing error:', e);
+    }
+  }, [toggleGallery, loadProject]);
   
   // Handle Keyboard shortcuts: 'h' for Debug Menu, Space for Play/Edit mode toggle
   useEffect(() => {

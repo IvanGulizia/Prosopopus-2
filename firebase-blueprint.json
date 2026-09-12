@@ -27,6 +27,23 @@
           "description": "Thumbnail preview data URL",
           "maxLength": 150000
         },
+        "deletePasscode": {
+          "type": "string",
+          "description": "Passcode for deleting the creation",
+          "maxLength": 32
+        },
+        "likeCount": {
+          "type": "number",
+          "description": "Number of upvotes / likes"
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether this creation is highlighted in the Featured section by admin"
+        },
+        "aspectRatio": {
+          "type": "string",
+          "description": "Aspect ratio tag for adaptive bento masonry (e.g. wide, square, tall)"
+        },
         "reportCount": {
           "type": "number",
           "description": "Number of user flags / reports"

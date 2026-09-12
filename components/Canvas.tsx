@@ -529,7 +529,7 @@ export const Canvas: React.FC = () => {
         return;
     }
     const stroke = resolveActiveVisibleStroke(project, ui);
-    if (!stroke || !stroke.points || stroke.points.length === 0) {
+    if (!stroke || stroke.visible === false || !stroke.points || stroke.points.length === 0) {
         setSelectionBounds(null);
         return;
     }
@@ -590,6 +590,7 @@ export const Canvas: React.FC = () => {
      const strokes = resolveLayerVisibleStrokes(project, ui, activeLayerId);
      for (let i = strokes.length - 1; i >= 0; i--) {
         const s = strokes[i];
+        if (s.visible === false) continue;
         if (!s.points || s.points.length === 0) continue;
         const isHit = isPointInStroke(p, s.points) || ((s.closed || s.shapeConfig || (s.style?.fillColor && s.style?.fillColor !== 'none')) && isPointInsidePolygon(p, s.points));
         if (isHit) {
@@ -1853,7 +1854,7 @@ export const Canvas: React.FC = () => {
                });
              });
            });
-         } else {
+          } else {
            // MATRIX ONION SKINNING
            currentProject.keyframes.forEach(kf => {
             if (kf.id === currentUI.selectedKeyframeId) return; 
@@ -1866,83 +1867,99 @@ export const Canvas: React.FC = () => {
                if (!isLayerActive && currentUI.inactiveLayerMode === 'hidden') return;
 
                const inactiveMultiplier = isLayerActive ? 1.0 : (currentUI.inactiveLayerOpacity ?? 0.35);
-               const stroke = ls.strokes[0];
-               if (stroke && stroke.points.length > 1) {
-                 const isSpline = targetLayer?.interpolationMode === 'spline';
-                 const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
-                 const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
 
-                 const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (
-                   (targetLayer?.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
-                     enabled: true,
-                     type: currentUI.symmetryType,
-                     axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
-                     axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
-                     radialCount: currentUI.symmetryRadialCount || 4
-                   } : null
-                 );
+               // Find the number of strokes already drawn in the CURRENT keyframe for this layer
+               const currentKfLayerState = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId)?.layerStates.find(l => l.layerId === targetLayer.id);
+               // Count strokes that actually have points drawn
+               const currentNumStrokes = currentKfLayerState?.strokes.filter(s => s.points && s.points.length > 0).length || 0;
 
-                 const onionPaths = [stroke.points];
-                 if (layerSym && layerSym.enabled) {
-                   const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
-                   const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
-                   onionPaths.push(...getSymmetricPoints(stroke.points, layerSym.type, ax, ay, layerSym.radialCount || 4));
-                 }
+               ls.strokes.forEach((stroke, strokeIndex) => {
+                 if (stroke && stroke.points.length > 1) {
+                   const isSpline = targetLayer?.interpolationMode === 'spline';
+                   const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
+                   const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
 
-                 onionPaths.forEach(pts => {
-                   if (pts.length === 0) return;
-                   
-                   const strokeRadii = stroke.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
-                   const isQuadShape = pts.length === 4 || pts.length === 5;
+                   let isTargetStroke = false;
+                   if (targetLayer.type === 'comp' && isLayerActive && currentUI.compOnionTargetHighlight) {
+                       isTargetStroke = (strokeIndex === currentNumStrokes);
+                   }
 
-                   const renderPath = () => {
-                     if (isSpline) {
-                       drawCatmullRomSpline(ctx, pts, 0.5);
-                     } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
-                       drawRoundedRectangle(ctx, pts, strokeRadii, cornerRoundness);
-                     } else {
-                       ctx.beginPath();
-                       if (cornerRoundness > 0) {
-                         drawCornerRoundedPath(ctx, pts, cornerRoundness);
+                   const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (
+                     (targetLayer?.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
+                       enabled: true,
+                       type: currentUI.symmetryType,
+                       axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
+                       axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
+                       radialCount: currentUI.symmetryRadialCount || 4
+                     } : null
+                   );
+
+                   const onionPaths = [stroke.points];
+                   if (layerSym && layerSym.enabled) {
+                     const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
+                     const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
+                     onionPaths.push(...getSymmetricPoints(stroke.points, layerSym.type, ax, ay, layerSym.radialCount || 4));
+                   }
+
+                   onionPaths.forEach(pts => {
+                     if (pts.length === 0) return;
+                     
+                     const strokeRadii = stroke.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii;
+                     const isQuadShape = pts.length === 4 || pts.length === 5;
+
+                     const renderPath = () => {
+                       if (isSpline) {
+                         drawCatmullRomSpline(ctx, pts, 0.5);
+                       } else if (isQuadShape && (strokeRadii || cornerRoundness > 0)) {
+                         drawRoundedRectangle(ctx, pts, strokeRadii, cornerRoundness);
                        } else {
-                         ctx.moveTo(pts[0].x, pts[0].y);
-                         for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                         ctx.beginPath();
+                         if (cornerRoundness > 0) {
+                           drawCornerRoundedPath(ctx, pts, cornerRoundness);
+                         } else {
+                           ctx.moveTo(pts[0].x, pts[0].y);
+                           for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                         }
                        }
-                     }
-                   };
+                     };
 
-                   // 1. Translucent Styled representation
-                   if (onionMode === 'styled' || onionMode === 'both') {
-                     ctx.save();
-                     ctx.globalAlpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1) * inactiveMultiplier;
-                     renderPath();
-                     if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
-                       ctx.fillStyle = resolvedStyle.fillColor;
-                       ctx.fill();
+                     // 1. Translucent Styled representation
+                     if (onionMode === 'styled' || onionMode === 'both') {
+                       ctx.save();
+                       let alpha = currentUI.onionSkinOpacity * (targetLayer?.opacity ?? 1) * inactiveMultiplier;
+                       if (isTargetStroke) alpha = Math.min(1.0, alpha + (currentUI.compOnionTargetOpacityBoost || 0.45));
+                       ctx.globalAlpha = alpha;
+                       renderPath();
+                       if (resolvedStyle.fillColor && resolvedStyle.fillColor !== 'none') {
+                         ctx.fillStyle = isTargetStroke ? (currentUI.compOnionTargetColor || '#F59E0B') : resolvedStyle.fillColor;
+                         ctx.fill();
+                       }
+                       if (resolvedStyle.strokeColor && resolvedStyle.strokeColor !== 'none') {
+                         ctx.lineCap = currentUI.strokeCap || 'round';
+                         ctx.lineJoin = 'round';
+                         ctx.strokeStyle = isTargetStroke ? (currentUI.compOnionTargetColor || '#F59E0B') : resolvedStyle.strokeColor;
+                         ctx.lineWidth = resolvedStyle.strokeWidth;
+                         ctx.stroke();
+                       }
+                       ctx.restore();
                      }
-                     if (resolvedStyle.strokeColor && resolvedStyle.strokeColor !== 'none') {
-                       ctx.lineCap = currentUI.strokeCap || 'round';
-                       ctx.lineJoin = 'round';
-                       ctx.strokeStyle = resolvedStyle.strokeColor;
-                       ctx.lineWidth = resolvedStyle.strokeWidth;
+
+                     // 2. Wireframe Thin line
+                     if (onionMode === 'wireframe' || onionMode === 'both') {
+                       ctx.save();
+                       let alpha = Math.min(1.0, (currentUI.onionSkinOpacity * 2.5 + 0.2) * inactiveMultiplier);
+                       if (isTargetStroke) alpha = Math.min(1.0, alpha + (currentUI.compOnionTargetOpacityBoost || 0.45));
+                       ctx.globalAlpha = alpha;
+                       renderPath();
+                       ctx.strokeStyle = isTargetStroke ? (currentUI.compOnionTargetColor || '#F59E0B') : (isLayerActive ? '#3B82F6' : '#64748B');
+                       ctx.lineWidth = isTargetStroke ? 2 : 1;
+                       ctx.setLineDash(isTargetStroke ? [4, 4] : []);
                        ctx.stroke();
+                       ctx.restore();
                      }
-                     ctx.restore();
-                   }
-
-                   // 2. Wireframe Thin line
-                   if (onionMode === 'wireframe' || onionMode === 'both') {
-                     ctx.save();
-                     ctx.globalAlpha = Math.min(1.0, (currentUI.onionSkinOpacity * 2.5 + 0.2) * inactiveMultiplier);
-                     renderPath();
-                     ctx.strokeStyle = isLayerActive ? '#3B82F6' : '#64748B';
-                     ctx.lineWidth = 1;
-                     ctx.setLineDash([]);
-                     ctx.stroke();
-                     ctx.restore();
-                   }
-                 });
-               }
+                   });
+                 }
+               });
             });
           });
          }
@@ -1976,8 +1993,8 @@ export const Canvas: React.FC = () => {
         }
 
         if (isLayerActive) {
-          if (isActivelyDrawingOnThisLayer && !layer.isGuide) {
-            // Dim existing stroke while redrawing new stroke over it
+          if (isActivelyDrawingOnThisLayer && !layer.isGuide && layer.type !== 'comp') {
+            // Dim existing stroke while redrawing new stroke over it (Matrix single-stroke only)
             layerGlobalAlpha *= (currentUI.redrawGhostOpacity ?? 0.25);
           } else if (isCreatingNewState && currentUI.mode === 'edit' && !layer.isGuide) {
             layerGlobalAlpha *= (currentUI.ghostStrokeOpacity ?? 0.4);
@@ -2393,11 +2410,53 @@ export const Canvas: React.FC = () => {
              .map(k => ({ ...k, weight: weights[k.id] || 0 }))
              .filter(k => Math.abs(k.weight) > 0.0001);
 
-        const strokeId = `stroke-${layer.id}-unique`;
+        const targetStrokeIds: string[] = [];
+        if (layer.type === 'comp') {
+          layerRelevantKeyframes.forEach(kf => {
+            const ls = kf.layerStates.find(s => s.layerId === layer.id);
+            ls?.strokes.forEach(st => {
+              if (st.id && !targetStrokeIds.includes(st.id)) {
+                targetStrokeIds.push(st.id);
+              }
+            });
+          });
+        } else {
+          targetStrokeIds.push(`stroke-${layer.id}-unique`);
+        }
 
-        const strokeData = activeKeyframes.map(kf => {
+        if (targetStrokeIds.length === 0) return;
+
+        targetStrokeIds.forEach(strokeId => {
+          // In Edit Mode with a selected keyframe:
+          // For the ACTIVE layer, if this stroke does NOT exist in the current keyframe, do not render phantom
+          if (isLayerActive && currentUI.mode === 'edit' && currentUI.selectedKeyframeId) {
+            const currentKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
+            const currentLayerState = currentKf?.layerStates.find(s => s.layerId === layer.id);
+            const hasStrokeInCurrentKf = layer.type === 'comp'
+              ? currentLayerState?.strokes.some(s => s.id === strokeId)
+              : (currentLayerState?.strokes.length || 0) > 0;
+            if (!hasStrokeInCurrentKf) {
+              return;
+            }
+          }
+
+          const strokeData = activeKeyframes.map(kf => {
             const state = kf.layerStates.find(ls => ls.layerId === layer.id);
-            const s = state?.strokes[0]; 
+            const s = layer.type === 'comp'
+              ? state?.strokes.find(st => st.id === strokeId)
+              : state?.strokes[0]; 
+            if (!s || s.visible === false) {
+              return { 
+                weight: kf.weight, 
+                points: undefined, 
+                style: undefined, 
+                color: undefined, 
+                fillColor: undefined, 
+                width: undefined,
+                cornerRoundness: 0,
+                cornerRadii: undefined
+              };
+            }
             const resolvedStyle = resolveStrokeStyle(s, layer);
             return { 
                 weight: kf.weight, 
@@ -2409,167 +2468,168 @@ export const Canvas: React.FC = () => {
                 cornerRoundness: resolvedStyle.cornerRoundness ?? 0,
                 cornerRadii: s?.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii
             };
-        });
+          });
 
-        const sortedByWeight = [...strokeData].sort((a,b) => b.weight - a.weight);
-        const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
-        if (!primaryStroke) return;
+          const sortedByWeight = [...strokeData].sort((a,b) => b.weight - a.weight);
+          const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
+          if (!primaryStroke || !primaryStroke.points || primaryStroke.points.length === 0) return;
 
-        let { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness, cornerRadii: interpolatedCornerRadii } = interpolateStrokePoints(
-            strokeId, 
-            primaryStroke.points, 
-            strokeData, 
-            layer.interpolationMode,
-            interpolationTargetCount,
-            {
-                exaggerationEnabled: currentUI.overshootExaggerationEnabled,
-                exaggerationFactor: currentUI.overshootExaggerationFactor ?? 1.25
-            }
-        );
+          let { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness, cornerRadii: interpolatedCornerRadii } = interpolateStrokePoints(
+              strokeId, 
+              primaryStroke.points, 
+              strokeData, 
+              layer.interpolationMode,
+              interpolationTargetCount,
+              {
+                  exaggerationEnabled: currentUI.overshootExaggerationEnabled,
+                  exaggerationFactor: currentUI.overshootExaggerationFactor ?? 1.25
+              }
+          );
 
-        // Approach B: Dynamic Vertex Inertial Velocity / Jiggle (Disney Follow-Through)
-        if (currentUI.overshootVertexInertiaEnabled && interpolatedPoints.length > 0 && currentUI.mode === 'play') {
-            const stiffness = (currentUI.overshootVertexInertiaFactor ?? 0.6) * 120.0;
-            const damping = (currentUI.overshootVertexDamping ?? 0.75) * 35.0;
-            const mass = Math.max(0.1, currentUI.overshootVertexMass ?? 1.0);
-            const inertiaKey = `layer-${layer.id}-stroke-${strokeId}`;
-            let stored = vertexInertiaRef.current.get(inertiaKey);
+          // Approach B: Dynamic Vertex Inertial Velocity / Jiggle (Disney Follow-Through)
+          if (currentUI.overshootVertexInertiaEnabled && interpolatedPoints.length > 0 && currentUI.mode === 'play') {
+              const stiffness = (currentUI.overshootVertexInertiaFactor ?? 0.6) * 120.0;
+              const damping = (currentUI.overshootVertexDamping ?? 0.75) * 35.0;
+              const mass = Math.max(0.1, currentUI.overshootVertexMass ?? 1.0);
+              const inertiaKey = `layer-${layer.id}-stroke-${strokeId}`;
+              let stored = vertexInertiaRef.current.get(inertiaKey);
 
-            if (!stored || stored.current.length !== interpolatedPoints.length) {
-                stored = {
-                    current: interpolatedPoints.map(p => ({ ...p })),
-                    velocity: interpolatedPoints.map(() => ({ x: 0, y: 0 }))
-                };
-                vertexInertiaRef.current.set(inertiaKey, stored);
-            } else {
-                const subSteps = 2;
-                const subDt = Math.min(dt, 0.05) / subSteps;
-                const snapProtection = currentUI.overshootVertexSnapProtection ?? 0.75;
+              if (!stored || stored.current.length !== interpolatedPoints.length) {
+                  stored = {
+                      current: interpolatedPoints.map(p => ({ ...p })),
+                      velocity: interpolatedPoints.map(() => ({ x: 0, y: 0 }))
+                  };
+                  vertexInertiaRef.current.set(inertiaKey, stored);
+              } else {
+                  const subSteps = 2;
+                  const subDt = Math.min(dt, 0.05) / subSteps;
+                  const snapProtection = currentUI.overshootVertexSnapProtection ?? 0.75;
 
-                for (let step = 0; step < subSteps; step++) {
-                    for (let i = 0; i < interpolatedPoints.length; i++) {
-                        const targetPt = interpolatedPoints[i];
-                        const curPt = stored.current[i];
-                        const vel = stored.velocity[i];
+                  for (let step = 0; step < subSteps; step++) {
+                      for (let i = 0; i < interpolatedPoints.length; i++) {
+                          const targetPt = interpolatedPoints[i];
+                          const curPt = stored.current[i];
+                          const vel = stored.velocity[i];
 
-                        const dx = targetPt.x - curPt.x;
-                        const dy = targetPt.y - curPt.y;
-                        const dist = Math.hypot(dx, dy);
+                          const dx = targetPt.x - curPt.x;
+                          const dy = targetPt.y - curPt.y;
+                          const dist = Math.hypot(dx, dy);
 
-                        // Adaptive damping: when distant (high displacement), dynamically increase damping to avoid runaway oscillation/whipping
-                        const effectiveDamping = snapProtection > 0 
-                            ? damping * (1 + snapProtection * Math.min(3.0, dist / 80.0))
-                            : damping;
+                          // Adaptive damping: when distant (high displacement), dynamically increase damping to avoid runaway oscillation/whipping
+                          const effectiveDamping = snapProtection > 0 
+                              ? damping * (1 + snapProtection * Math.min(3.0, dist / 80.0))
+                              : damping;
 
-                        // Second-order Spring-Damper-Mass Force: F = k*(target - cur) - c*vel
-                        let springF_x = dx * stiffness - vel.x * effectiveDamping;
-                        let springF_y = dy * stiffness - vel.y * effectiveDamping;
+                          // Second-order Spring-Damper-Mass Force: F = k*(target - cur) - c*vel
+                          let springF_x = dx * stiffness - vel.x * effectiveDamping;
+                          let springF_y = dy * stiffness - vel.y * effectiveDamping;
 
-                        if (snapProtection > 0) {
-                            // Clamp max acceleration to prevent sudden explosive snaps
-                            const maxAcc = 20000 * (1 - snapProtection * 0.4);
-                            const currentAcc = Math.hypot(springF_x / mass, springF_y / mass);
-                            if (currentAcc > maxAcc) {
-                                const ratio = maxAcc / currentAcc;
-                                springF_x *= ratio;
-                                springF_y *= ratio;
-                            }
-                        }
+                          if (snapProtection > 0) {
+                              // Clamp max acceleration to prevent sudden explosive snaps
+                              const maxAcc = 20000 * (1 - snapProtection * 0.4);
+                              const currentAcc = Math.hypot(springF_x / mass, springF_y / mass);
+                              if (currentAcc > maxAcc) {
+                                  const ratio = maxAcc / currentAcc;
+                                  springF_x *= ratio;
+                                  springF_y *= ratio;
+                              }
+                          }
 
-                        vel.x += (springF_x / mass) * subDt;
-                        vel.y += (springF_y / mass) * subDt;
+                          vel.x += (springF_x / mass) * subDt;
+                          vel.y += (springF_y / mass) * subDt;
 
-                        if (snapProtection > 0) {
-                            // Clamp max velocity to prevent vertex whipping
-                            const maxVel = 2500 * (1 - snapProtection * 0.35);
-                            const currentVel = Math.hypot(vel.x, vel.y);
-                            if (currentVel > maxVel) {
-                                const ratio = maxVel / currentVel;
-                                vel.x *= ratio;
-                                vel.y *= ratio;
-                            }
-                        }
+                          if (snapProtection > 0) {
+                              // Clamp max velocity to prevent vertex whipping
+                              const maxVel = 2500 * (1 - snapProtection * 0.35);
+                              const currentVel = Math.hypot(vel.x, vel.y);
+                              if (currentVel > maxVel) {
+                                  const ratio = maxVel / currentVel;
+                                  vel.x *= ratio;
+                                  vel.y *= ratio;
+                              }
+                          }
 
-                        curPt.x += vel.x * subDt;
-                        curPt.y += vel.y * subDt;
-                        curPt.pressure = targetPt.pressure;
+                          curPt.x += vel.x * subDt;
+                          curPt.y += vel.y * subDt;
+                          curPt.pressure = targetPt.pressure;
+                      }
+                  }
+                  interpolatedPoints = stored.current.map(p => ({ ...p }));
+              }
+          } else if (currentUI.mode !== 'play') {
+              vertexInertiaRef.current.clear();
+          }
+
+          if (isInactiveWireframe) {
+            interpolatedFill = 'none';
+            interpolatedWidth = 1;
+          }
+
+          if (interpolatedPoints.length > 0) {
+              const layerSym = layer.symmetry?.enabled ? layer.symmetry : (
+                (layer.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
+                  enabled: true,
+                  type: currentUI.symmetryType,
+                  axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
+                  axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
+                  radialCount: currentUI.symmetryRadialCount || 4
+                } : null
+              );
+
+              const allInterpolatedPaths = [interpolatedPoints];
+              if (layerSym && layerSym.enabled) {
+                const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
+                const axY = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
+                const symVariants = getSymmetricPoints(interpolatedPoints, layerSym.type, ax, axY, layerSym.radialCount || 4);
+                allInterpolatedPaths.push(...symVariants);
+              }
+
+              allInterpolatedPaths.forEach(pathPts => {
+                if (pathPts.length === 0) return;
+
+                const isRectangleShape = primaryStroke?.shapeConfig?.type === 'rectangle';
+
+                if (layer.interpolationMode === 'spline') {
+                    drawCatmullRomSpline(ctx, pathPts, 0.5); 
+                } else if (isRectangleShape && (interpolatedCornerRadii || interpolatedCornerRoundness > 0)) {
+                    drawRoundedRectangle(ctx, pathPts, interpolatedCornerRadii, interpolatedCornerRoundness);
+                } else {
+                    ctx.beginPath();
+                    if (interpolatedCornerRoundness > 0) {
+                        drawCornerRoundedPath(ctx, pathPts, interpolatedCornerRoundness);
+                    } else {
+                        ctx.moveTo(pathPts[0].x, pathPts[0].y);
+                        for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
                     }
                 }
-                interpolatedPoints = stored.current.map(p => ({ ...p }));
-            }
-        } else if (currentUI.mode !== 'play') {
-            vertexInertiaRef.current.clear();
-        }
-
-        if (isInactiveWireframe) {
-          interpolatedFill = 'none';
-          interpolatedWidth = 1;
-        }
-
-        if (interpolatedPoints.length > 0) {
-            const layerSym = layer.symmetry?.enabled ? layer.symmetry : (
-              (layer.id === currentUI.selectedLayerId && currentUI.symmetryEnabled && currentUI.symmetryTarget !== 'merge') ? {
-                enabled: true,
-                type: currentUI.symmetryType,
-                axisX: currentUI.symmetryAxisX ?? (CANVAS_WIDTH / 2),
-                axisY: currentUI.symmetryAxisY ?? (CANVAS_HEIGHT / 2),
-                radialCount: currentUI.symmetryRadialCount || 4
-              } : null
-            );
-
-            const allInterpolatedPaths = [interpolatedPoints];
-            if (layerSym && layerSym.enabled) {
-              const ax = layerSym.axisX ?? (CANVAS_WIDTH / 2);
-              const ay = layerSym.axisY ?? (CANVAS_HEIGHT / 2);
-              const symVariants = getSymmetricPoints(interpolatedPoints, layerSym.type, ax, ay, layerSym.radialCount || 4);
-              allInterpolatedPaths.push(...symVariants);
-            }
-
-            allInterpolatedPaths.forEach(pathPts => {
-              if (pathPts.length === 0) return;
-
-              const isRectangleShape = primaryStroke?.shapeConfig?.type === 'rectangle';
-
-              if (layer.interpolationMode === 'spline') {
-                  drawCatmullRomSpline(ctx, pathPts, 0.5); 
-              } else if (isRectangleShape && (interpolatedCornerRadii || interpolatedCornerRoundness > 0)) {
-                  drawRoundedRectangle(ctx, pathPts, interpolatedCornerRadii, interpolatedCornerRoundness);
-              } else {
-                  ctx.beginPath();
-                  if (interpolatedCornerRoundness > 0) {
-                      drawCornerRoundedPath(ctx, pathPts, interpolatedCornerRoundness);
-                  } else {
-                      ctx.moveTo(pathPts[0].x, pathPts[0].y);
-                      for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
-                  }
-              }
+                
+                ctx.globalAlpha = layerGlobalAlpha;
+                switch(layer.blendMode) {
+                    case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
+                    case 'screen': ctx.globalCompositeOperation = 'screen'; break;
+                    case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
+                    case 'difference': ctx.globalCompositeOperation = 'difference'; break;
+                    case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
+                    default: ctx.globalCompositeOperation = 'source-over';
+                }
+                
+                if (interpolatedFill && interpolatedFill !== 'none') {
+                    ctx.fillStyle = interpolatedFill;
+                    ctx.fill();
+                }
+                if (interpolatedColor && interpolatedColor !== 'none') {
+                    ctx.lineCap = currentUI.strokeCap || 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.strokeStyle = interpolatedColor;
+                    ctx.lineWidth = interpolatedWidth;
+                    ctx.stroke();
+                }
+              });
               
-              ctx.globalAlpha = layerGlobalAlpha;
-              switch(layer.blendMode) {
-                  case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
-                  case 'screen': ctx.globalCompositeOperation = 'screen'; break;
-                  case 'overlay': ctx.globalCompositeOperation = 'overlay'; break;
-                  case 'difference': ctx.globalCompositeOperation = 'difference'; break;
-                  case 'exclusion': ctx.globalCompositeOperation = 'exclusion'; break;
-                  default: ctx.globalCompositeOperation = 'source-over';
-              }
-              
-              if (interpolatedFill && interpolatedFill !== 'none') {
-                  ctx.fillStyle = interpolatedFill;
-                  ctx.fill();
-              }
-              if (interpolatedColor && interpolatedColor !== 'none') {
-                  ctx.lineCap = currentUI.strokeCap || 'round';
-                  ctx.lineJoin = 'round';
-                  ctx.strokeStyle = interpolatedColor;
-                  ctx.lineWidth = interpolatedWidth;
-                  ctx.stroke();
-              }
-            });
-            
-            ctx.globalAlpha = 1.0;
-            ctx.globalCompositeOperation = 'source-over';
-        }
+              ctx.globalAlpha = 1.0;
+              ctx.globalCompositeOperation = 'source-over';
+          }
+        });
       });
 
       if (interactionModeRef.current === 'drawing' && currentPointsRef.current.length > 0) {

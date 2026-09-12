@@ -6,7 +6,12 @@
 1. **Multi-Axis Matrix & Continuous Interpolation**:
    - 2D/3D custom interpolation axes with Bilinear and IDW radial blending.
    - Spring dynamics, kinetic momentum extrapolation, and harmonic vertex inertia.
-2. **Expert Mode (Animation Timeline - Rive & Figma Motion Inspired)**:
+2. **Calques Composites (Comp) & Sous-Calques Interpolés** :
+   - Mode de calque multi-tracés (`type: 'comp'`) accumulant les traits et les formes.
+   - Sous-calques ordonnés avec identifiants, index (`#1`, `#2`, ...), nommage inline et visibilité individuelle.
+   - Volet accordéon escamotable fermé par défaut pour une ergonomie visuelle sans encombrement.
+   - Interpolation multi-vectorielle et réassignation de pose par état.
+3. **Expert Mode (Animation Timeline - Rive & Figma Motion Inspired)**:
    - Dedicated layer-by-layer tracks with clean graduation ruler and fluid scrubbing playhead.
    - Matrix 2D is automatically hidden when Timeline is open for total clarity.
    - Auto-keyframing enabled by default: scrub to any time, draw or edit points, and the keyframe is recorded automatically.
@@ -22,10 +27,14 @@
    - Rich trigger suite: `click`, `double_click`, `pointer_down`, `pointer_up`, `hover_enter`, `hover_leave`, `scroll_down`, `scroll_up`, `scroll_scrub`, `key_press`, `delay`, `animation_end`.
    - Continuous scroll scrubbing: drive clips or pose morphs dynamically with the mouse wheel or touchpad.
    - Live Inspector panel for node and transition attributes (duration, easing curve, event parameters).
-4. **Galerie Communautaire & Partage Cloud (Firebase Firestore Spark)**:
-   - Partage en un clic avec génération automatique de vignette et titre/pseudo.
-   - Galerie en ligne avec recherche, prévisualisation et chargement instantané dans l'éditeur.
-   - Modération intégrée : bouton de signalement pour les utilisateurs, et authentification Google modérateur (`gulizia.i@gmail.com`) avec suppression en direct.
+4. **Galerie Communautaire 2.0 & Partage Cloud (Firebase Firestore Spark)**:
+   - Galerie grand format (max-w-7xl) avec flux adaptatif Masonry / Bento box.
+   - Prévisualisation interactive en direct (`InteractiveCardPreview.tsx`) animée à 60 FPS avec suivi du curseur et physique vectorielle au survol.
+   - Système d'upvote / likes temps réel avec mémorisation locale.
+   - Section et filtre "À la une" (Featured) modifiable par l'administrateur en un clic.
+   - Onglets de filtrage et tri : Récents, Populaires (par likes), À la une (Featured), Mes créations.
+   - Routage URL et liens de partage profonds : `?view=gallery` pour ouvrir directement la galerie, et `?project=<id>` pour charger immédiatement une animation partagée.
+   - Modération hybride sans popup : suppression par code PIN pour les créateurs et mot de passe maître Admin (`prosopopus2026`).
 5. **Settings & Toggles**:
    - Dedicated "Mode Expert" section in Settings panel.
    - URL parameter support: `?mode=expert`.

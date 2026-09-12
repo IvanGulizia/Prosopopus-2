@@ -55,9 +55,13 @@ export interface Stroke {
   closed: boolean; // True for shapes, false for lines
   style?: Partial<StyleProps>; // Overrides for this specific stroke state
   shapeConfig?: ShapeConfig; // Stored shape metadata for non-destructive direct editing
+  name?: string; // Sub-element display name for Comp layers (e.g., "Tracé 1", "Oeil")
+  visible?: boolean; // Sub-element visibility toggle
+  locked?: boolean; // Sub-element lock toggle
 }
 
 // --- Layers ---
+export type LayerType = 'matrix' | 'guide' | 'comp';
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference' | 'exclusion';
 export type InterpolationMode = 'resample' | 'points' | 'spline' | 'length';
 export type LayerDriverMode = 'matrix' | 'timeline' | 'pose';
@@ -78,10 +82,11 @@ export interface Layer {
   blendMode: BlendMode;
   opacity: number;
   interpolationMode: InterpolationMode; // Per-layer setting
+  type?: LayerType; // 'matrix' (single-stroke per state), 'guide' (static reference), 'comp' (composite multi-stroke with interpolation)
   driverMode?: LayerDriverMode; // 'matrix' (default, controlled by spatial axes) or 'timeline' (temporal keyframes)
   baseStyle?: StyleProps; // The default style for strokes in this layer
   symmetry?: LayerSymmetryConfig;
-  isGuide?: boolean; // Calque Repère: freehand multi-stroke drawing without state interpolation
+  isGuide?: boolean; // Calque Repère: freehand multi-stroke drawing without state interpolation (legacy/convenience)
   guideStrokes?: Stroke[]; // Stored strokes for the guide layer
 }
 
@@ -424,6 +429,9 @@ export interface UIState {
   guideOnionColorRight: string;
   onionSkinOpacity: number;
   onionSkinMode: OnionSkinMode; // 'wireframe' | 'styled' | 'both'
+  compOnionTargetHighlight: boolean; // Highlight the stroke slot that is being targeted for next interpolation in comp layers
+  compOnionTargetColor: string; // Accent color for the targeted next interpolation stroke (default #F59E0B)
+  compOnionTargetOpacityBoost: number; // Opacity boost for target stroke (0 to 1, default 0.45)
   inactiveLayerOpacity: number; // 0 to 1, opacity of non-selected layers
   inactiveLayerMode: InactiveLayerMode; // 'dimmed' | 'wireframe' | 'normal' | 'hidden'
   

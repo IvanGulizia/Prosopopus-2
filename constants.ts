@@ -215,6 +215,9 @@ export const INITIAL_UI_STATE: UIState = {
   guideOnionColorRight: '#3b82f6',
   onionSkinOpacity: 0.2,
   onionSkinMode: 'styled',
+  compOnionTargetHighlight: true,
+  compOnionTargetColor: '#F59E0B',
+  compOnionTargetOpacityBoost: 0.45,
   inactiveLayerOpacity: 0.35,
   inactiveLayerMode: 'dimmed',
 

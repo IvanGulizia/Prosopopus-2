@@ -34,12 +34,15 @@ service cloud.firestore {
 
     function isValidCreation(data) {
       return data.keys().hasAll(['title', 'authorName', 'projectJson', 'reportCount', 'createdAt'])
-        && data.keys().size() <= 7
+        && data.keys().size() <= 10
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 100
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 50
         && data.projectJson is string && data.projectJson.size() <= 900000
         && (!('thumbnail' in data) || (data.thumbnail is string && data.thumbnail.size() <= 150000))
         && (!('deletePasscode' in data) || (data.deletePasscode is string && data.deletePasscode.size() <= 32))
+        && (!('likeCount' in data) || (data.likeCount is number && data.likeCount >= 0))
+        && (!('featured' in data) || data.featured is bool)
+        && (!('aspectRatio' in data) || (data.aspectRatio is string && data.aspectRatio.size() <= 16))
         && data.reportCount == 0
         && (data.createdAt is timestamp || data.createdAt == request.time);
     }
@@ -51,12 +54,17 @@ service cloud.firestore {
       // Anyone can share their creation without prior login
       allow create: if isValidId(creationId) && isValidCreation(incoming());
 
-      // Anyone can flag/report (+1 to reportCount) or admin can update
-      allow update: if (
-        isValidId(creationId) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['reportCount']) &&
-        incoming().reportCount == existing().reportCount + 1
-      ) || isAdmin();
+      // Update rules:
+      // 1. Report count increment (+1)
+      // 2. Like/upvote increment or decrement (+1 or -1)
+      // 3. Featured flag toggle (admin)
+      // 4. Authenticated admin full update
+      allow update: if isValidId(creationId) && (
+        (incoming().diff(existing()).affectedKeys().hasOnly(['reportCount']) && incoming().reportCount == existing().reportCount + 1) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['likeCount']) && (incoming().likeCount == existing().likeCount + 1 || incoming().likeCount == existing().likeCount - 1)) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['featured']) && incoming().featured is bool) ||
+        isAdmin()
+      );
 
       // Deletion allowed for validated creation IDs
       allow delete: if isValidId(creationId);
