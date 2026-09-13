@@ -88,6 +88,9 @@ export interface Layer {
   symmetry?: LayerSymmetryConfig;
   isGuide?: boolean; // Calque Repère: freehand multi-stroke drawing without state interpolation (legacy/convenience)
   guideStrokes?: Stroke[]; // Stored strokes for the guide layer
+  isGroup?: boolean; // Dossier / Groupe de calques normaux
+  groupId?: string; // ID du groupe parent si le calque est rangé dans un groupe
+  collapsed?: boolean; // Pour un groupe: état replié / déplié dans le panneau
 }
 
 // --- Axes & Keyframes (The Interpolation Engine) ---

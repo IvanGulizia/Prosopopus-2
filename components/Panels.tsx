@@ -1,17 +1,46 @@
 // components/Panels.tsx
 import React, { useState, useRef } from 'react';
-import { Layers, Settings, Plus, Trash2, Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronUp, ChevronRight, X } from 'lucide-react';
+import { Layers, Settings, Plus, Trash2, Eraser, Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronUp, ChevronRight, X, Folder, FolderOpen, FolderPlus, CornerDownRight } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { BlendMode, InterpolationMode, Theme, PlayModeCursorType, PlayModeCursorShape, LayerType, Stroke } from '../types';
 import { PALETTE_COLORS } from '../constants';
 
 export const LayerPanel: React.FC = () => {
-  const { project, toggleLayerVisibility, toggleLayerLock, setLayerBlendMode, setLayerInterpolationMode, setLayerDriverMode, toggleLayerSymmetry, toggleLayerGuideMode, setLayerType, addCompLayer, renameStroke, toggleStrokeVisibility, deleteStrokeFromLayer, selectStroke, selectLayer, addLayer, deleteLayer, renameLayer, reorderLayers, ui, toggleLayerPanel } = useStore();
+  const { 
+    project, 
+    toggleLayerVisibility, 
+    toggleLayerLock, 
+    setLayerBlendMode, 
+    setLayerInterpolationMode, 
+    setLayerDriverMode, 
+    toggleLayerSymmetry, 
+    toggleLayerGuideMode, 
+    setLayerType, 
+    addCompLayer, 
+    addCompSlot, 
+    renameStroke, 
+    toggleStrokeVisibility, 
+    deleteStrokeFromLayer,
+    clearStrokeInCurrentKeyframe, 
+    selectStroke, 
+    selectLayer, 
+    addLayer, 
+    deleteLayer, 
+    renameLayer, 
+    reorderLayers, 
+    createLayerGroup, 
+    toggleGroupCollapse, 
+    moveLayerToGroup, 
+    ui, 
+    toggleLayerPanel 
+  } = useStore();
   const layers = project.layers.filter(l => !l.id.includes('-sym-'));
   const { theme } = ui;
 
   // Drag and Drop State
-  const [draggedLayerIndex, setDraggedLayerIndex] = useState<number | null>(null);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [dragOverLayerId, setDragOverLayerId] = useState<string | null>(null);
+  const [dragOverPosition, setDragOverPosition] = useState<'above' | 'below' | 'inside' | null>(null);
   
   // Inline Editing State
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -83,25 +112,86 @@ export const LayerPanel: React.FC = () => {
     }
   };
 
-  const onDragStart = (e: React.DragEvent, index: number) => {
-      setDraggedLayerIndex(index);
-      e.dataTransfer.effectAllowed = "move";
+  const onDragStart = (e: React.DragEvent, layerId: string) => {
+    setDraggedLayerId(layerId);
+    e.dataTransfer.effectAllowed = "move";
   };
 
-  const onDragOver = (e: React.DragEvent, index: number) => {
-      e.preventDefault(); 
-      e.dataTransfer.dropEffect = "move";
+  const onDragOver = (e: React.DragEvent, targetLayer: any) => {
+    e.preventDefault(); 
+    e.dataTransfer.dropEffect = "move";
+    if (!draggedLayerId || draggedLayerId === targetLayer.id) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const height = rect.height;
+
+    setDragOverLayerId(targetLayer.id);
+
+    if (targetLayer.isGroup) {
+      if (relY > height * 0.25 && relY < height * 0.75) {
+        setDragOverPosition('inside');
+      } else if (relY <= height * 0.25) {
+        setDragOverPosition('above');
+      } else {
+        setDragOverPosition('below');
+      }
+    } else {
+      if (relY <= height * 0.5) {
+        setDragOverPosition('above');
+      } else {
+        setDragOverPosition('below');
+      }
+    }
   };
 
-  const onDrop = (e: React.DragEvent, targetIndex: number) => {
-      e.preventDefault();
-      if (draggedLayerIndex === null) return;
-      
-      const realDragIndex = layers.length - 1 - draggedLayerIndex;
-      const realTargetIndex = layers.length - 1 - targetIndex;
+  const onDragLeave = () => {
+    setDragOverLayerId(null);
+    setDragOverPosition(null);
+  };
 
-      reorderLayers(realDragIndex, realTargetIndex);
-      setDraggedLayerIndex(null);
+  const onDrop = (e: React.DragEvent, targetLayer: any) => {
+    e.preventDefault();
+    if (!draggedLayerId || draggedLayerId === targetLayer.id) {
+      setDraggedLayerId(null);
+      setDragOverLayerId(null);
+      setDragOverPosition(null);
+      return;
+    }
+
+    const draggedLayer = layers.find(l => l.id === draggedLayerId);
+    if (!draggedLayer) return;
+
+    if (targetLayer.isGroup && dragOverPosition === 'inside') {
+      // Move layer into target group
+      moveLayerToGroup(draggedLayerId, targetLayer.id);
+    } else {
+      // Reorder layers
+      const sourceRealIdx = layers.findIndex(l => l.id === draggedLayerId);
+      let targetRealIdx = layers.findIndex(l => l.id === targetLayer.id);
+
+      if (sourceRealIdx !== -1 && targetRealIdx !== -1) {
+        if (draggedLayer.groupId !== targetLayer.groupId) {
+          moveLayerToGroup(draggedLayerId, targetLayer.groupId);
+        }
+        
+        // Since the array is reversed visually, "above" means later in the array
+        if (dragOverPosition === 'above') {
+          targetRealIdx += 1;
+        }
+
+        // We need to adjust target index if the source is before it, because splice removes source first
+        if (sourceRealIdx < targetRealIdx) {
+          targetRealIdx -= 1;
+        }
+
+        reorderLayers(sourceRealIdx, targetRealIdx);
+      }
+    }
+
+    setDraggedLayerId(null);
+    setDragOverLayerId(null);
+    setDragOverPosition(null);
   };
 
   const getNextInterpolationMode = (current: InterpolationMode): InterpolationMode => {
@@ -132,6 +222,13 @@ export const LayerPanel: React.FC = () => {
         </div>
         <div className="flex gap-1.5 items-center">
             <button 
+              onClick={createLayerGroup}
+              className="rounded-full p-1.5 transition-colors border border-gray-200 hover:bg-gray-100 text-gray-700 shadow-xs"
+              title="Créer un groupe de calques"
+            >
+              <FolderPlus size={16} />
+            </button>
+            <button 
               onClick={addLayer}
               className="rounded-full p-1.5 transition-colors shadow-sm"
               style={{ backgroundColor: theme.accent, color: '#FFFFFF' }}
@@ -150,346 +247,461 @@ export const LayerPanel: React.FC = () => {
       </div>
       
       <div className="overflow-y-auto flex-1 p-4 space-y-2 custom-scrollbar">
-        {[...layers].reverse().map((layer, index) => {
-          const isComp = layer.type === 'comp';
-          const isExpanded = expandedCompLayers[layer.id] ?? false;
-
-          let compStrokes: { id: string; name: string; visible: boolean; inCurrentState: boolean; strokeRef: Stroke }[] = [];
-          if (isComp) {
-            const currentKf = project.keyframes.find(k => k.id === ui.selectedKeyframeId) || project.keyframes[0];
-            const currentLayerState = currentKf?.layerStates.find(ls => ls.layerId === layer.id);
-            
-            if (currentLayerState) {
-                // Since we ensure all keyframes have exactly the same array of sub-layer "slots" in the exact same order for comp layers,
-                // we can just use the currentLayerState.strokes directly to render the slots!
-                compStrokes = currentLayerState.strokes.map(s => {
-                    const isFilled = s.points && s.points.length > 0;
-                    return {
-                        id: s.id,
-                        name: s.name || `Tracé`,
-                        visible: s.visible ?? true,
-                        inCurrentState: isFilled,
-                        strokeRef: s
-                    };
-                });
+        {(() => {
+          const rootLayers: any[] = [];
+          const layerMap = new Map();
+          layers.forEach(l => {
+            layerMap.set(l.id, { ...l, children: [] });
+          });
+          layers.forEach(l => {
+            const node = layerMap.get(l.id);
+            if (l.groupId && layerMap.has(l.groupId)) {
+              layerMap.get(l.groupId).children.push(node);
+            } else {
+              rootLayers.push(node);
             }
-          }
+          });
 
-          return (
-            <div key={layer.id} className="flex flex-col gap-1">
-              <div 
-                draggable
-                onDragStart={(e) => onDragStart(e, index)}
-                onDragOver={(e) => onDragOver(e, index)}
-                onDrop={(e) => onDrop(e, index)}
-                onClick={() => selectLayer(layer.id)}
-                className={`group flex items-center gap-2 p-2.5 rounded-2xl text-sm cursor-pointer transition-all border relative ${
-                  ui.selectedLayerId === layer.id 
-                    ? 'shadow-sm' 
-                    : 'shadow-sm'
-                } ${draggedLayerIndex === index ? 'opacity-50' : ''}`}
-                style={{ 
-                  backgroundColor: ui.selectedLayerId === layer.id ? theme.activeBg : 'transparent',
-                  borderColor: ui.selectedLayerId === layer.id ? theme.accent : 'transparent',
-                  color: ui.selectedLayerId === layer.id ? theme.textMain : theme.textMuted
-                }}
-              >
-                {/* Grip */}
-                <div className="cursor-grab text-gray-300 hover:text-gray-400 flex flex-col gap-[2px]">
-                    <div className="flex gap-[2px]">
-                        <div className="w-1 h-1 rounded-full bg-current"/>
-                        <div className="w-1 h-1 rounded-full bg-current"/>
-                    </div>
-                    <div className="flex gap-[2px]">
-                        <div className="w-1 h-1 rounded-full bg-current"/>
-                        <div className="w-1 h-1 rounded-full bg-current"/>
-                    </div>
-                </div>
+          const renderLayerNode = (layerNode: any, depth = 0) => {
+            const layer = layerNode;
+            const isGroup = layer.isGroup;
+            const isComp = layer.type === 'comp';
+            const isExpandedComp = expandedCompLayers[layer.id] ?? false;
 
-                {/* Sub-layers Retractable Toggle (for Comp layers) */}
-                {isComp && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExpandedCompLayers(prev => ({ ...prev, [layer.id]: !prev[layer.id] }));
-                    }}
-                    className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 transition-colors text-gray-500"
-                    title={isExpanded ? "Replier les sous-calques (tracés)" : "Déplier les sous-calques (tracés)"}
-                  >
-                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </button>
-                )}
-
-                {/* Visibility */}
-                <button 
-                  onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id); }}
-                  className={`w-6 h-6 flex items-center justify-center rounded-md hover:bg-black/5 transition-colors ${layer.visible ? 'text-gray-700' : 'text-gray-300'}`}
-                >
-                  {layer.visible 
-                    ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            let compStrokes: { id: string; name: string; visible: boolean; inCurrentState: boolean; strokeRef: Stroke }[] = [];
+            let activeTargetId: string | null = null;
+            if (isComp) {
+              const currentKf = project.keyframes.find(k => k.id === ui.selectedKeyframeId) || project.keyframes[0];
+              const currentLayerState = currentKf?.layerStates.find(ls => ls.layerId === layer.id);
+              
+              // Gather all canonical slots across keyframes in stable order
+              const canonicalSlots: Stroke[] = [];
+              const seenIds = new Set<string>();
+              for (const k of project.keyframes) {
+                const ls = k.layerStates.find(l => l.layerId === layer.id);
+                if (ls) {
+                  for (const s of ls.strokes) {
+                    if (s.id && !seenIds.has(s.id)) {
+                      seenIds.add(s.id);
+                      canonicalSlots.push(s);
+                    }
                   }
-                </button>
+                }
+              }
 
-                {/* Name */}
-                {editingLayerId === layer.id ? (
-                   <input
-                     ref={renameInputRef}
-                     type="text"
-                     value={editingLayerName}
-                     onChange={(e) => setEditingLayerName(e.target.value)}
-                     onBlur={handleRenameSubmit}
-                     onKeyDown={handleRenameKeyDown}
-                     className="flex-1 font-semibold text-[13px] bg-white border border-blue-300 rounded px-1 py-0.5 outline-none focus:ring-2 focus:ring-blue-500/50"
-                     onClick={(e) => e.stopPropagation()}
-                   />
-                ) : (
-                   <span 
-                     className="truncate flex-1 font-semibold select-none text-[13px] flex items-center gap-1.5"
-                     onDoubleClick={() => handleRenameStart(layer.id, layer.name)}
-                   >
-                     <span>{layer.name}</span>
-                     {isComp && (
-                       <span className="text-[10px] font-normal px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-mono">
-                         {compStrokes.length}
-                       </span>
-                     )}
-                   </span>
-                )}
-                
-                {/* Quick Actions */}
-                <div className="flex gap-1 items-center">
-                     {/* Layer Type Toggle (Matrix vs Comp vs Guide) */}
-                     <button 
-                        onClick={(e) => { 
-                           e.stopPropagation(); 
-                           const curType: LayerType = layer.type || (layer.isGuide ? 'guide' : 'matrix');
-                           const nextType: LayerType = curType === 'matrix' ? 'comp' : (curType === 'comp' ? 'guide' : 'matrix');
-                           setLayerType(layer.id, nextType);
+              compStrokes = canonicalSlots.map(canonicalStroke => {
+                  const s = currentLayerState?.strokes.find(st => st.id === canonicalStroke.id);
+                  // If s is found and has points, it's defined in the current state
+                  const isFilled = s && s.points && s.points.length > 0;
+                  return {
+                      id: canonicalStroke.id,
+                      name: canonicalStroke.name || `Tracé`,
+                      visible: canonicalStroke.visible ?? true,
+                      inCurrentState: !!isFilled,
+                      strokeRef: s || canonicalStroke // use the current state stroke if available, otherwise the canonical one for reference
+                  };
+              });
+
+              if (layer.id === ui.selectedLayerId) {
+                  let defaultFreehandTargetId = null;
+                  let defaultShapeTargetId = null;
+                  let defaultEllipseTargetId = null;
+                  let defaultPolygonTargetId = null;
+                  
+                  // Find first free slot for each tool
+                  compStrokes.forEach(s => {
+                      if (!s.inCurrentState) {
+                         const sc = s.strokeRef.shapeConfig;
+                         if (!sc && !defaultFreehandTargetId) defaultFreehandTargetId = s.id;
+                         if (sc?.type === 'rectangle' && !defaultShapeTargetId) defaultShapeTargetId = s.id;
+                         if (sc?.type === 'ellipse' && !defaultEllipseTargetId) defaultEllipseTargetId = s.id;
+                         if (sc?.type === 'polygon' && !defaultPolygonTargetId) defaultPolygonTargetId = s.id;
+                      }
+                  });
+                  
+                  if (ui.selectedStrokeId) {
+                      activeTargetId = ui.selectedStrokeId;
+                  } else {
+                      if (ui.selectedTool === 'pen') activeTargetId = defaultFreehandTargetId;
+                      else if (ui.selectedTool === 'shape' && ui.shapeType === 'rectangle') activeTargetId = defaultShapeTargetId;
+                      else if (ui.selectedTool === 'shape' && ui.shapeType === 'ellipse') activeTargetId = defaultEllipseTargetId;
+                      else if (ui.selectedTool === 'shape' && ui.shapeType === 'polygon') activeTargetId = defaultPolygonTargetId;
+                  }
+              }
+            }
+
+            return (
+              <div key={layer.id} className="flex flex-col gap-1">
+                <div 
+                  draggable
+                  onDragStart={(e) => onDragStart(e, layer.id)}
+                  onDragOver={(e) => onDragOver(e, layer)}
+                  onDragLeave={onDragLeave}
+                  onDrop={(e) => onDrop(e, layer)}
+                  onClick={() => selectLayer(layer.id)}
+                  className={`group flex items-center gap-2 p-2.5 rounded-2xl text-sm cursor-pointer transition-all border relative ${
+                    ui.selectedLayerId === layer.id 
+                      ? 'shadow-sm' 
+                      : 'shadow-sm'
+                  } ${draggedLayerId === layer.id ? 'opacity-40' : ''} ${
+                    dragOverLayerId === layer.id && dragOverPosition === 'inside' ? 'ring-2 ring-indigo-500 bg-indigo-50/50' : ''
+                  } ${
+                    dragOverLayerId === layer.id && dragOverPosition === 'above' ? 'border-t-2 border-t-indigo-500' : ''
+                  } ${
+                    dragOverLayerId === layer.id && dragOverPosition === 'below' ? 'border-b-2 border-b-indigo-500' : ''
+                  }`}
+                  style={{ 
+                    backgroundColor: ui.selectedLayerId === layer.id ? theme.activeBg : 'transparent',
+                    borderColor: ui.selectedLayerId === layer.id ? theme.accent : 'transparent',
+                    color: ui.selectedLayerId === layer.id ? theme.textMain : theme.textMuted
+                  }}
+                >
+                  {/* Grip */}
+                  <div className="cursor-grab text-gray-300 hover:text-gray-400 flex flex-col gap-[2px]">
+                      <div className="flex gap-[2px]">
+                          <div className="w-1 h-1 rounded-full bg-current"/>
+                          <div className="w-1 h-1 rounded-full bg-current"/>
+                      </div>
+                      <div className="flex gap-[2px]">
+                          <div className="w-1 h-1 rounded-full bg-current"/>
+                          <div className="w-1 h-1 rounded-full bg-current"/>
+                      </div>
+                  </div>
+
+                  {isGroup ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleGroupCollapse(layer.id);
+                      }}
+                      className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 transition-colors text-gray-500"
+                      title={layer.collapsed ? "Déplier le groupe" : "Replier le groupe"}
+                    >
+                      {layer.collapsed ? <Folder size={14} /> : <FolderOpen size={14} />}
+                    </button>
+                  ) : (
+                    isComp && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedCompLayers(prev => ({ ...prev, [layer.id]: !prev[layer.id] }));
                         }}
-                        className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-0.5 ${
-                          layer.type === 'comp'
-                            ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
-                            : (layer.isGuide || layer.type === 'guide')
-                            ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
-                            : 'text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100'
-                        }`}
-                        title={
-                          layer.type === 'comp'
-                            ? "Mode Composite (Multi-tracés avec interpolation). Cliquer pour basculer vers Repère."
-                            : (layer.isGuide || layer.type === 'guide')
-                            ? "Mode Repère (Dessin libre fixe). Cliquer pour basculer vers Matrice."
-                            : "Mode Matrice (Tracé unique interpolé). Cliquer pour basculer vers Composite."
-                        }
-                     >
-                        {layer.type === 'comp' ? 'COMP' : (layer.isGuide || layer.type === 'guide') ? 'REP' : 'MTX'}
-                     </button>
+                        className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 transition-colors text-gray-500"
+                        title={isExpandedComp ? "Replier les sous-calques (tracés)" : "Déplier les sous-calques (tracés)"}
+                      >
+                        {isExpandedComp ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                    )
+                  )}
 
-                     {/* Symmetry indicator and toggle */}
-                     {layer.symmetry?.enabled && (
+                  {/* Visibility */}
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id); }}
+                    className={`w-6 h-6 flex items-center justify-center rounded-md hover:bg-black/5 transition-colors ${layer.visible ? 'text-gray-700' : 'text-gray-300'}`}
+                  >
+                    {layer.visible 
+                      ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    }
+                  </button>
+
+                  {/* Name */}
+                  {editingLayerId === layer.id ? (
+                     <input
+                       ref={renameInputRef}
+                       type="text"
+                       value={editingLayerName}
+                       onChange={(e) => setEditingLayerName(e.target.value)}
+                       onBlur={handleRenameSubmit}
+                       onKeyDown={handleRenameKeyDown}
+                       className="flex-1 font-semibold text-[13px] bg-white border border-blue-300 rounded px-1 py-0.5 outline-none focus:ring-2 focus:ring-blue-500/50"
+                       onClick={(e) => e.stopPropagation()}
+                     />
+                  ) : (
+                     <span 
+                       className="truncate flex-1 font-semibold select-none text-[13px] flex items-center gap-1.5"
+                       onDoubleClick={() => handleRenameStart(layer.id, layer.name)}
+                     >
+                       <span>{layer.name}</span>
+                       {isComp && (
+                         <span className="text-[10px] font-normal px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-mono">
+                           {compStrokes.length}
+                         </span>
+                       )}
+                     </span>
+                  )}
+                  
+                  {/* Quick Actions */}
+                  <div className="flex gap-1 items-center">
+                       {/* Layer Type Toggle (Matrix vs Comp vs Guide) */}
+                       {!isGroup && (
+                         <button 
+                            onClick={(e) => { 
+                               e.stopPropagation(); 
+                               const curType: LayerType = layer.type || (layer.isGuide ? 'guide' : 'matrix');
+                               const nextType: LayerType = curType === 'matrix' ? 'comp' : (curType === 'comp' ? 'guide' : 'matrix');
+                               setLayerType(layer.id, nextType);
+                            }}
+                            className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-0.5 ${
+                              layer.type === 'comp'
+                                ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                                : (layer.isGuide || layer.type === 'guide')
+                                ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
+                                : 'text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100'
+                            }`}
+                            title={
+                              layer.type === 'comp'
+                                ? "Mode Composite (Multi-tracés avec interpolation). Cliquer pour basculer vers Repère."
+                                : (layer.isGuide || layer.type === 'guide')
+                                ? "Mode Repère (Dessin libre fixe). Cliquer pour basculer vers Matrice."
+                                : "Mode Matrice (Tracé unique interpolé). Cliquer pour basculer vers Composite."
+                            }
+                         >
+                            {layer.type === 'comp' ? 'COMP' : (layer.isGuide || layer.type === 'guide') ? 'REP' : 'MTX'}
+                         </button>
+                       )}
+
+                       {/* Symmetry indicator and toggle */}
+                       {!isGroup && layer.symmetry?.enabled && (
+                         <button 
+                            onClick={(e) => { 
+                               e.stopPropagation(); 
+                               toggleLayerSymmetry(layer.id); 
+                            }}
+                            className="h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border text-indigo-600 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 flex items-center gap-0.5"
+                            title={`Symétrie active (${layer.symmetry.type || 'vertical'}). Cliquer pour désactiver.`}
+                         >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 3v18"/><path d="M16 6l4 4-4 4"/><path d="M8 6L4 10l4 4"/></svg>
+                            SYM
+                         </button>
+                       )}
+
+                       {!isGroup && ui.expertModeEnabled && (
+                        <>
+                        {/* Driver Mode Toggle (Matrix vs Timeline vs Pose) */}
                        <button 
                           onClick={(e) => { 
                              e.stopPropagation(); 
-                             toggleLayerSymmetry(layer.id); 
+                             const nextMode = layer.driverMode === "timeline" ? "pose" : layer.driverMode === "pose" ? "matrix" : "timeline";
+                             setLayerDriverMode(layer.id, nextMode); 
                           }}
-                          className="h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border text-indigo-600 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 flex items-center gap-0.5"
-                          title={`Symétrie active (${layer.symmetry.type || 'vertical'}). Cliquer pour désactiver.`}
-                       >
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 3v18"/><path d="M16 6l4 4-4 4"/><path d="M8 6L4 10l4 4"/></svg>
-                          SYM
-                       </button>
-                     )}
-
-                     {ui.expertModeEnabled && (
-                      <>
-                      {/* Driver Mode Toggle (Matrix vs Timeline vs Pose) */}
-                     <button 
-                        onClick={(e) => { 
-                           e.stopPropagation(); 
-                           const nextMode = layer.driverMode === "timeline" ? "pose" : layer.driverMode === "pose" ? "matrix" : "timeline";
-                           setLayerDriverMode(layer.id, nextMode); 
-                        }}
-                        className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
-                            layer.driverMode === "timeline"
-                            ? "text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100"
-                            : layer.driverMode === "pose"
-                            ? "text-emerald-600 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
-                            : "text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100"
-                        }`}
-                        title={
-                          layer.driverMode === "timeline" ? "Mode Driver: Timeline temporelle" :
-                          layer.driverMode === "pose" ? "Mode Driver: Pose (Machine à états / Hors-Timeline)" :
-                          "Mode Driver: Matrice 2D spatiale"
-                        }
-                     >
-                        {layer.driverMode === "timeline" ? "TIME" : layer.driverMode === "pose" ? "POSE" : "MTX"}
-                     </button>
-                      </>
-                     )}
-
-                     {/* Interpolation Mode Toggle */}
-                     <button 
-                        onClick={(e) => { 
-                           e.stopPropagation(); 
-                           setLayerInterpolationMode(layer.id, getNextInterpolationMode(layer.interpolationMode)); 
-                        }}
-                        className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
-                            layer.interpolationMode === 'resample' 
-                            ? 'text-blue-500 bg-blue-50 border-blue-100' 
-                            : (layer.interpolationMode === 'length'
-                                ? 'text-purple-600 bg-purple-50 border-purple-100'
-                                : (layer.interpolationMode === 'points' 
-                                    ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
-                                    : 'text-amber-600 bg-amber-50 border-amber-100')) // SPLINE
-                            }`}
-                        title={`Mode: ${layer.interpolationMode}`}
-                     >
-                        {getInterpolationLabel(layer.interpolationMode)}
-                     </button>
-
-                     <button
-                       onClick={(e) => {
-                         e.stopPropagation();
-                         const modes: BlendMode[] = ['normal', 'multiply', 'screen', 'difference', 'exclusion'];
-                         const nextMode = modes[(modes.indexOf(layer.blendMode) + 1) % modes.length];
-                         setLayerBlendMode(layer.id, nextMode);
-                       }}
-                       className={`h-5 px-1.5 rounded text-[9px] font-bold uppercase border min-w-[32px] ${
-                         layer.blendMode !== 'normal' 
-                            ? 'bg-purple-50 text-purple-600 border-purple-100' 
-                            : 'bg-gray-50 text-gray-400 border-gray-100'
-                       }`}
-                       title={`Blend: ${layer.blendMode}`}
-                     >
-                      {layer.blendMode.substring(0, 3)}
-                    </button>
-                    
-                    <button
-                        onClick={(e) => { e.stopPropagation(); deleteLayer(layer.id); }}
-                        className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-all"
-                        title="Delete Layer"
-                     >
-                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                     </button>
-                </div>
-              </div>
-
-              {/* Sub-layers (Strokes) List - Retractable, closed by default */}
-              {isComp && isExpanded && (
-                <div className="ml-6 pl-2.5 border-l-2 border-dashed border-emerald-200/80 flex flex-col gap-1 py-1">
-                  {compStrokes.length === 0 ? (
-                    <div className="text-[11px] text-gray-400 py-1.5 px-2 italic bg-black/2 rounded-xl">
-                      Aucun tracé. Dessinez au pinceau ou ajoutez une forme pour accumuler des sous-calques.
-                    </div>
-                  ) : (
-                    compStrokes.map((stroke, sIdx) => {
-                      const isSelectedStroke = ui.selectedStrokeId === stroke.id && ui.selectedLayerId === layer.id;
-                      return (
-                        <div
-                          key={stroke.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            selectLayer(layer.id);
-                            selectStroke(stroke.id);
-                          }}
-                          className={`group/sub flex items-center gap-2 py-1.5 px-2 rounded-xl text-xs cursor-pointer transition-all border ${
-                            isSelectedStroke
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-medium shadow-xs'
-                              : 'bg-white/50 border-transparent hover:bg-black/5 text-gray-600'
+                          className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
+                              layer.driverMode === "timeline"
+                              ? "text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100"
+                              : layer.driverMode === "pose"
+                              ? "text-emerald-600 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+                              : "text-sky-600 bg-sky-50 border-sky-200 hover:bg-sky-100"
                           }`}
-                        >
-                          {/* Index */}
-                          <span className="text-[10px] font-mono px-1 rounded bg-black/5 text-gray-500 font-semibold">
-                            #{sIdx + 1}
-                          </span>
+                          title={
+                            layer.driverMode === "timeline" ? "Mode Driver: Timeline temporelle" :
+                            layer.driverMode === "pose" ? "Mode Driver: Pose (Machine à états / Hors-Timeline)" :
+                            "Mode Driver: Matrice 2D spatiale"
+                          }
+                       >
+                          {layer.driverMode === "timeline" ? "TIME" : layer.driverMode === "pose" ? "POSE" : "MTX"}
+                       </button>
+                        </>
+                       )}
 
-                          {/* Visibility */}
-                          <button
+                       {/* Interpolation Mode Toggle */}
+                       {!isGroup && (
+                         <button 
+                            onClick={(e) => { 
+                               e.stopPropagation(); 
+                               setLayerInterpolationMode(layer.id, getNextInterpolationMode(layer.interpolationMode)); 
+                            }}
+                            className={`h-5 px-1.5 rounded text-[9px] font-black uppercase tracking-wider transition-all border ${
+                                layer.interpolationMode === 'resample' 
+                                ? 'text-blue-500 bg-blue-50 border-blue-100' 
+                                : (layer.interpolationMode === 'length'
+                                    ? 'text-purple-600 bg-purple-50 border-purple-100'
+                                    : (layer.interpolationMode === 'points' 
+                                        ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
+                                        : 'text-amber-600 bg-amber-50 border-amber-100')) // SPLINE
+                                }`}
+                            title={`Mode: ${layer.interpolationMode}`}
+                         >
+                            {getInterpolationLabel(layer.interpolationMode)}
+                         </button>
+                       )}
+
+                       <button
+                         onClick={(e) => {
+                           e.stopPropagation();
+                           const modes: BlendMode[] = ['normal', 'multiply', 'screen', 'difference', 'exclusion'];
+                           const nextMode = modes[(modes.indexOf(layer.blendMode || 'normal') + 1) % modes.length];
+                           setLayerBlendMode(layer.id, nextMode);
+                         }}
+                         className={`h-5 px-1.5 rounded text-[9px] font-bold uppercase border min-w-[32px] ${
+                           layer.blendMode !== 'normal' 
+                              ? 'bg-purple-50 text-purple-600 border-purple-100' 
+                              : 'bg-gray-50 text-gray-400 border-gray-100'
+                         }`}
+                         title={`Blend: ${layer.blendMode || 'normal'}`}
+                       >
+                        {(layer.blendMode || 'normal').substring(0, 3)}
+                      </button>
+                      
+                      <button
+                          onClick={(e) => { e.stopPropagation(); deleteLayer(layer.id); }}
+                          className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-all"
+                          title="Delete Layer"
+                       >
+                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                       </button>
+                  </div>
+                </div>
+
+                {isGroup && !layer.collapsed && layer.children && layer.children.length > 0 && (
+                  <div className="flex flex-col gap-1 mt-1 pl-4 relative">
+                    <div className="absolute left-[8px] top-0 bottom-[14px] w-[2px] bg-gray-100 rounded-full" />
+                    {[...layer.children].reverse().map(child => renderLayerNode(child, depth + 1))}
+                  </div>
+                )}
+
+                {/* Sub-layers (Strokes) List - Retractable, closed by default */}
+                {!isGroup && isComp && isExpandedComp && (
+                  <div className="ml-6 pl-2.5 border-l-2 border-dashed border-emerald-200/80 flex flex-col gap-1 py-1">
+                    {compStrokes.length === 0 ? (
+                      <div className="text-[11px] text-gray-400 py-1.5 px-2 italic bg-black/2 rounded-xl">
+                        Aucun tracé. Dessinez au pinceau ou ajoutez une forme pour accumuler des sous-calques.
+                      </div>
+                    ) : (
+                      compStrokes.map((stroke, sIdx) => {
+                        const isSelectedStroke = ui.selectedStrokeId === stroke.id && ui.selectedLayerId === layer.id;
+                        return (
+                          <div
+                            key={stroke.id}
                             onClick={(e) => {
                               e.stopPropagation();
-                              toggleStrokeVisibility(layer.id, stroke.id);
+                              selectLayer(layer.id);
+                              selectStroke(stroke.id);
                             }}
-                            className={`w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 transition-colors ${
-                              stroke.visible ? 'text-gray-700' : 'text-gray-300'
+                            className={`group/sub flex items-center gap-2 py-1.5 px-2 rounded-xl text-xs cursor-pointer transition-all border ${
+                              isSelectedStroke
+                                ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-medium shadow-xs'
+                                : 'bg-white/50 border-transparent hover:bg-black/5 text-gray-600'
                             }`}
-                            title={stroke.visible ? "Masquer ce tracé" : "Afficher ce tracé"}
                           >
-                            {stroke.visible ? <Eye size={13} /> : <EyeOff size={13} />}
-                          </button>
+                            {/* Index */}
+                            <span className="text-[10px] font-mono px-1 rounded bg-black/5 text-gray-500 font-semibold">
+                              #{sIdx + 1}
+                            </span>
 
-                          {/* Name & Inline Rename */}
-                          {editingStrokeId === stroke.id ? (
-                            <input
-                              ref={renameStrokeInputRef}
-                              type="text"
-                              value={editingStrokeName}
-                              onChange={(e) => setEditingStrokeName(e.target.value)}
-                              onBlur={() => {
-                                if (editingStrokeName.trim()) {
-                                  renameStroke(layer.id, stroke.id, editingStrokeName.trim());
-                                }
-                                setEditingStrokeId(null);
+                            {/* Visibility */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleStrokeVisibility(layer.id, stroke.id);
                               }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
+                              className={`w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 transition-colors ${
+                                stroke.visible ? 'text-gray-700' : 'text-gray-300'
+                              }`}
+                              title={stroke.visible ? "Masquer ce tracé" : "Afficher ce tracé"}
+                            >
+                              {stroke.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+                            </button>
+
+                            {/* Name & Inline Rename */}
+                            {editingStrokeId === stroke.id ? (
+                              <input
+                                ref={renameStrokeInputRef}
+                                type="text"
+                                value={editingStrokeName}
+                                onChange={(e) => setEditingStrokeName(e.target.value)}
+                                onBlur={() => {
                                   if (editingStrokeName.trim()) {
                                     renameStroke(layer.id, stroke.id, editingStrokeName.trim());
                                   }
                                   setEditingStrokeId(null);
-                                } else if (e.key === 'Escape') {
-                                  setEditingStrokeId(null);
-                                }
-                              }}
-                              className="flex-1 text-[12px] bg-white border border-emerald-300 rounded px-1 py-0.5 outline-none focus:ring-1 focus:ring-emerald-400"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <span
-                              className={`truncate flex-1 text-[12px] select-none ${stroke.inCurrentState ? '' : 'italic opacity-60 text-emerald-700'}`}
-                              onDoubleClick={(e) => {
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    if (editingStrokeName.trim()) {
+                                      renameStroke(layer.id, stroke.id, editingStrokeName.trim());
+                                    }
+                                    setEditingStrokeId(null);
+                                  } else if (e.key === 'Escape') {
+                                    setEditingStrokeId(null);
+                                  }
+                                }}
+                                className="flex-1 text-[11px] font-medium bg-white border border-blue-300 rounded px-1 py-0 outline-none focus:ring-1 focus:ring-blue-500/50"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            ) : (
+                              <span 
+                                className="truncate flex-1"
+                                onDoubleClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingStrokeId(stroke.id);
+                                  setEditingStrokeName(stroke.name);
+                                  setTimeout(() => renameStrokeInputRef.current?.focus(), 10);
+                                }}
+                              >
+                                {stroke.name}
+                              </span>
+                            )}
+
+                            {/* Target Indicator */}
+                            {stroke.id === activeTargetId && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" title="Cible du prochain tracé" />
+                            )}
+                            {/* State presence indicator */}
+                            {!stroke.inCurrentState && (
+                              <span 
+                                className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium"
+                                title="Non encore tracé sur cet état."
+                              >
+                                À dessiner
+                              </span>
+                            )}
+                            {stroke.inCurrentState && (
+                               <button
+                               onClick={(e) => {
+                                 e.stopPropagation();
+                                 clearStrokeInCurrentKeyframe(layer.id, stroke.id);
+                               }}
+                               className="opacity-0 group-hover/sub:opacity-100 hover:text-orange-500 hover:bg-orange-50 p-0.5 rounded transition-all text-gray-400"
+                               title="Effacer ce tracé pour cet état (créer un trou)"
+                             >
+                               <Eraser size={12} />
+                             </button>
+                            )}
+
+                            {/* Delete Globally */}
+                            <button
+                              onClick={(e) => {
                                 e.stopPropagation();
-                                setEditingStrokeId(stroke.id);
-                                setEditingStrokeName(stroke.name);
-                                setTimeout(() => renameStrokeInputRef.current?.focus(), 0);
+                                deleteStrokeFromLayer(layer.id, stroke.id);
                               }}
-                              title="Double-cliquer pour renommer"
+                              className="opacity-0 group-hover/sub:opacity-100 hover:text-red-500 hover:bg-red-50 p-0.5 rounded transition-all text-gray-400"
+                              title="Supprimer définitivement ce sous-calque"
                             >
-                              {stroke.name}
-                            </span>
-                          )}
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
 
-                          {/* State presence indicator */}
-                          {!stroke.inCurrentState && (
-                            <span 
-                              className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium"
-                              title="Non encore tracé sur cet état. Le prochain trait dessiné s'y attachera, ou cliquez pour le sélectionner explicitement."
-                            >
-                              À dessiner
-                            </span>
-                          )}
+                    {/* Dummy slot for next new drawing */}
+                    {!activeTargetId && (
+                       <div className="flex items-center gap-2 py-1 px-2 rounded-xl text-xs border border-dashed border-gray-200 bg-gray-50/50 text-gray-400 cursor-default">
+                           <span className="w-4 h-4 rounded-full border border-gray-200 flex items-center justify-center">+</span>
+                           <span className="italic flex-1">Nouveau {ui.selectedTool === 'pen' ? 'Tracé' : 'Forme'}...</span>
+                           <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" title="Cible du prochain tracé" />
+                       </div>
+                    )}
+                    
+                  </div>
+                )}
+              </div>
+            );
+          };
 
-                          {/* Delete */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteStrokeFromLayer(layer.id, stroke.id);
-                            }}
-                            className="opacity-0 group-hover/sub:opacity-100 hover:text-red-500 hover:bg-red-50 p-0.5 rounded transition-all text-gray-400"
-                            title="Supprimer ce sous-calque"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+          return rootLayers.reverse().map(l => renderLayerNode(l, 0));
+        })()}
       </div>
-      
       {/* Right Edge Resizer Handle */}
       <div 
         onMouseDown={handleResizeMouseDown}
@@ -1959,7 +2171,7 @@ export const SettingsPanel: React.FC = () => {
           >
             <div className="p-6 space-y-4 text-center">
               <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto">
-                <Trash2 className="text-red-500" size={32} />
+                <Eraser className="text-red-500" size={32} />
               </div>
               <div className="space-y-1">
                 <h3 className="text-lg font-bold text-gray-900">Reset Project?</h3>

@@ -949,7 +949,6 @@ export const Canvas: React.FC = () => {
                  const snappedP = getSnappedPoint(p);
                  setInteractionMode('drawingShape');
                  setShapeDragStart({ startPoint: snappedP, currentPoint: snappedP });
-                 selectStroke(null);
                  (e.target as Element).setPointerCapture(e.pointerId);
                  return;
              }
@@ -1881,7 +1880,24 @@ export const Canvas: React.FC = () => {
 
                    let isTargetStroke = false;
                    if (targetLayer.type === 'comp' && isLayerActive && currentUI.compOnionTargetHighlight) {
-                       isTargetStroke = (strokeIndex === currentNumStrokes);
+                       let activeTargetId = currentUI.selectedStrokeId;
+                       if (!activeTargetId) {
+                           // Find all canonical slots
+                           const canonicalSlots = new Map<string, any>();
+                           projectRef.current.keyframes.forEach(kf => {
+                               kf.layerStates.find(ls => ls.layerId === targetLayer.id)?.strokes.forEach(s => {
+                                   if (!canonicalSlots.has(s.id)) canonicalSlots.set(s.id, s);
+                               });
+                           });
+                           const currentFilled = new Set(currentKfLayerState?.strokes.filter(s => s.points.length > 0).map(s => s.id) || []);
+                           for (const s of canonicalSlots.values()) {
+                               if (!currentFilled.has(s.id)) {
+                                   if (currentUI.selectedTool === 'pen' && !s.shapeConfig) { activeTargetId = s.id; break; }
+                                   if (currentUI.selectedTool === 'shape' && s.shapeConfig?.type === currentUI.shapeType) { activeTargetId = s.id; break; }
+                               }
+                           }
+                       }
+                       isTargetStroke = (stroke.id === activeTargetId);
                    }
 
                    const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (
@@ -2380,39 +2396,9 @@ export const Canvas: React.FC = () => {
           }
         }
 
-        if (layerRelevantKeyframes.length === 0) return;
-
-        // In Edit Mode with a selected keyframe:
-        // For the ACTIVE layer, if this keyframe does NOT have a stroke yet (an unkeyed/empty state on this layer),
-        // do not render a phantom solid stroke for it. (Other layers remain visible in their inactive transparency mode).
-        if (isLayerActive && currentUI.mode === 'edit' && currentUI.selectedKeyframeId) {
-            const currentKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
-            const currentLayerState = currentKf?.layerStates.find(s => s.layerId === layer.id);
-            const hasStrokeInCurrentKf = (currentLayerState?.strokes.length || 0) > 0;
-            if (!hasStrokeInCurrentKf) {
-                return;
-            }
-        }
-
-        const allowExtrapolation = currentUI.overshootExtrapolationEnabled ?? true;
-        const extrapolationFactor = currentUI.overshootExtrapolationFactor ?? 0.2;
-
-        const weights = calculateInterpolationWeights(
-            currentAxesDict, 
-            layerRelevantKeyframes, 
-            currentUI.interpolationExponent, 
-            currentUI.interpolationStrategy,
-            allowExtrapolation,
-            extrapolationFactor
-        );
-
-        const activeKeyframes = layerRelevantKeyframes
-             .map(k => ({ ...k, weight: weights[k.id] || 0 }))
-             .filter(k => Math.abs(k.weight) > 0.0001);
-
         const targetStrokeIds: string[] = [];
         if (layer.type === 'comp') {
-          layerRelevantKeyframes.forEach(kf => {
+          currentProject.keyframes.forEach(kf => {
             const ls = kf.layerStates.find(s => s.layerId === layer.id);
             ls?.strokes.forEach(st => {
               if (st.id && !targetStrokeIds.includes(st.id)) {
@@ -2426,18 +2412,71 @@ export const Canvas: React.FC = () => {
 
         if (targetStrokeIds.length === 0) return;
 
+        const allowExtrapolation = currentUI.overshootExtrapolationEnabled ?? true;
+        const extrapolationFactor = currentUI.overshootExtrapolationFactor ?? 0.2;
+
         targetStrokeIds.forEach(strokeId => {
+          const strokeRelevantKeyframes = currentProject.keyframes.filter(kf => {
+            const ls = kf.layerStates.find(s => s.layerId === layer.id);
+            if (!ls) return false;
+            const st = layer.type === 'comp' ? ls.strokes.find(s => s.id === strokeId) : ls.strokes[0];
+            return st && st.points && st.points.length > 0;
+          });
+
+          if (strokeRelevantKeyframes.length === 0) return;
+
+          const weights = calculateInterpolationWeights(
+              currentAxesDict, 
+              strokeRelevantKeyframes, 
+              currentUI.interpolationExponent, 
+              currentUI.interpolationStrategy,
+              allowExtrapolation,
+              extrapolationFactor,
+              currentUI.gridCurvature ?? 1.0
+          );
+
+          const activeKeyframes = strokeRelevantKeyframes
+               .map(k => ({ ...k, weight: weights[k.id] || 0 }))
+               .filter(k => Math.abs(k.weight) > 0.0001);
           // In Edit Mode with a selected keyframe:
-          // For the ACTIVE layer, if this stroke does NOT exist in the current keyframe, do not render phantom
-          if (isLayerActive && currentUI.mode === 'edit' && currentUI.selectedKeyframeId) {
-            const currentKf = currentProject.keyframes.find(k => k.id === currentUI.selectedKeyframeId);
-            const currentLayerState = currentKf?.layerStates.find(s => s.layerId === layer.id);
-            const hasStrokeInCurrentKf = layer.type === 'comp'
-              ? currentLayerState?.strokes.some(s => s.id === strokeId)
-              : (currentLayerState?.strokes.length || 0) > 0;
-            if (!hasStrokeInCurrentKf) {
-              return;
-            }
+          // Check if this stroke has drawn points in the current keyframe.
+          let isGhostStroke = false;
+          let isTargetStroke = false;
+          
+          if (currentUI.mode !== 'play' && currentUI.selectedKeyframeId) {
+             const selKf = strokeRelevantKeyframes.find(k => k.id === currentUI.selectedKeyframeId);
+             if (!selKf) {
+                 isGhostStroke = true;
+             } else {
+                 const st = layer.type === 'comp' 
+                     ? selKf.layerStates.find(ls => ls.layerId === layer.id)?.strokes.find(s => s.id === strokeId)
+                     : selKf.layerStates.find(ls => ls.layerId === layer.id)?.strokes[0];
+                 if (!st || !st.points || st.points.length === 0) {
+                     isGhostStroke = true;
+                 }
+             }
+             
+             // Check if it's the target stroke in UI
+             if (layer.type === 'comp' && layer.id === currentUI.selectedLayerId) {
+                 let activeTargetId = currentUI.selectedStrokeId;
+                 if (!activeTargetId) {
+                     // Need to find default target based on tool
+                     const canonicalSlots = new Map<string, any>();
+                     currentProject.keyframes.forEach(k => {
+                         k.layerStates.find(ls => ls.layerId === layer.id)?.strokes.forEach(s => {
+                             if (s.id && !canonicalSlots.has(s.id)) canonicalSlots.set(s.id, s);
+                         });
+                     });
+                     for (const s of canonicalSlots.values()) {
+                         const isInCurrent = selKf?.layerStates.find(ls => ls.layerId === layer.id)?.strokes.find(st => st.id === s.id && st.points && st.points.length > 0);
+                         if (!isInCurrent) {
+                             if (currentUI.selectedTool === 'pen' && !s.shapeConfig) { activeTargetId = s.id; break; }
+                             if (currentUI.selectedTool === 'shape' && s.shapeConfig?.type === currentUI.shapeType) { activeTargetId = s.id; break; }
+                         }
+                     }
+                 }
+                 isTargetStroke = (strokeId === activeTargetId);
+             }
           }
 
           const strokeData = activeKeyframes.map(kf => {
@@ -2445,7 +2484,7 @@ export const Canvas: React.FC = () => {
             const s = layer.type === 'comp'
               ? state?.strokes.find(st => st.id === strokeId)
               : state?.strokes[0]; 
-            if (!s || s.visible === false) {
+            if (!s || s.visible === false || !s.points || s.points.length === 0) {
               return { 
                 weight: kf.weight, 
                 points: undefined, 
@@ -2471,7 +2510,7 @@ export const Canvas: React.FC = () => {
           });
 
           const sortedByWeight = [...strokeData].sort((a,b) => b.weight - a.weight);
-          const primaryStroke = sortedByWeight.find(sd => sd.style)?.style;
+          const primaryStroke = sortedByWeight.find(sd => sd.style && sd.points && sd.points.length > 0)?.style;
           if (!primaryStroke || !primaryStroke.points || primaryStroke.points.length === 0) return;
 
           let { points: interpolatedPoints, color: interpolatedColor, fillColor: interpolatedFill, width: interpolatedWidth, cornerRoundness: interpolatedCornerRoundness, cornerRadii: interpolatedCornerRadii } = interpolateStrokePoints(
@@ -2603,7 +2642,13 @@ export const Canvas: React.FC = () => {
                     }
                 }
                 
-                ctx.globalAlpha = layerGlobalAlpha;
+                ctx.globalAlpha = isGhostStroke 
+                    ? layerGlobalAlpha * (currentUI.ghostStrokeOpacity ?? 0.35) 
+                    : layerGlobalAlpha;
+                if (isGhostStroke && isTargetStroke) {
+                    ctx.globalAlpha = Math.min(1.0, ctx.globalAlpha + 0.2);
+                }
+                
                 switch(layer.blendMode) {
                     case 'multiply': ctx.globalCompositeOperation = 'multiply'; break;
                     case 'screen': ctx.globalCompositeOperation = 'screen'; break;
@@ -2614,15 +2659,34 @@ export const Canvas: React.FC = () => {
                 }
                 
                 if (interpolatedFill && interpolatedFill !== 'none') {
-                    ctx.fillStyle = interpolatedFill;
-                    ctx.fill();
+                    if (isGhostStroke && isTargetStroke) {
+                       ctx.fillStyle = 'rgba(245, 158, 11, 0.15)'; // faint orange fill
+                    } else if (isGhostStroke) {
+                       ctx.fillStyle = 'none'; // no fill for non-target ghosts to reduce clutter
+                    } else {
+                       ctx.fillStyle = interpolatedFill;
+                    }
+                    if (ctx.fillStyle !== 'none') ctx.fill();
                 }
                 if (interpolatedColor && interpolatedColor !== 'none') {
                     ctx.lineCap = currentUI.strokeCap || 'round';
                     ctx.lineJoin = 'round';
-                    ctx.strokeStyle = interpolatedColor;
-                    ctx.lineWidth = interpolatedWidth;
+                    if (isGhostStroke && isTargetStroke) {
+                        ctx.strokeStyle = '#F59E0B';
+                    } else if (isGhostStroke) {
+                        // Make shape ghosts and freehand ghosts consistent
+                        ctx.strokeStyle = '#94A3B8';
+                    } else {
+                        ctx.strokeStyle = interpolatedColor;
+                    }
+                    ctx.lineWidth = isGhostStroke ? 2.0 : interpolatedWidth;
+                    if (isGhostStroke) {
+                      ctx.setLineDash(isTargetStroke ? [5, 5] : []);
+                    } else {
+                      ctx.setLineDash([]);
+                    }
                     ctx.stroke();
+                    ctx.setLineDash([]);
                 }
               });
               

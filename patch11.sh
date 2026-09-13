@@ -1,2 +1,0 @@
-sed -i 's/cornerRoundness: baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness/cornerRoundness: baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness,\n      cornerRadii: baseStyle.cornerRadii/g' utils/style.ts
-sed -i 's/cornerRoundness: stroke.style.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness/cornerRoundness: stroke.style.cornerRoundness ?? baseStyle.cornerRoundness ?? defaultStyle.cornerRoundness,\n    cornerRadii: stroke.shapeConfig?.cornerRadii ?? stroke.style.cornerRadii ?? baseStyle.cornerRadii/g' utils/style.ts

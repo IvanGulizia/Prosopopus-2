@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.6.1] - Synchronisation Précise des Slots en Mode Comp & Interpolation Multi-Formes
+
+### Fixed
+- **Synchronisation Stricte des Slots Multi-États** :
+  - Chaque sous-calque (tracé libre ou forme géométrique) dispose désormais d'un slot unique et persistant garanti sur l'ensemble des états/keyframes.
+  - Lorsqu'une nouvelle forme (rectangle, ellipse, polygone) ou un tracé libre est ajouté dans un état (ex. État B), un slot vide (`points: []`) est automatiquement propagé dans les autres états (ex. État A), sans écraser ni décaler les slots existants.
+  - Résolution du problème d'interpolation croisée involontaire (ex. un tracé se métamorphosant avec un rectangle au lieu de son tracé correspondant).
+  - Préservation intégrale de la liste ordonnée des sous-calques entre les états (`Tracé 1`, `Tracé 2`, `Rectangle 1`, `Tracé 3`).
+- **Rendu Canvas Nettoyé** :
+  - Les slots vides (`points: []`) ne produisent aucun résidu graphique et ne participent pas à l'interpolation tant qu'ils ne sont pas dessinés sur l'état actif.
+- **Ajout Explicite de Sous-Calque** :
+  - Ajout de l'action `addCompSlot` et du bouton "+ Nouveau sous-calque" dans le panneau des calques pour pré-créer un sous-calque synchronisé vide avant le dessin.
+
 ## [2.6.0] - Calques Composites (Comp) & Gestionnaire de Sous-Calques Rétractables
 
 ### Added

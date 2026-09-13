@@ -1,0 +1,34 @@
+--- store/useStore.ts
++++ store/useStore.ts
+@@ -2145,8 +2145,26 @@
+   }),
+   
+   selectStroke: (strokeId) => set((state) => {
+-     const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, state.ui.selectedKeyframeId, strokeId, state.ui.selectedTimelineKeyframeId);
+-     return { ui: { ...state.ui, selectedStrokeId: strokeId, ...hydratedProps } };
++     let newTool = state.ui.selectedTool;
++     let newShapeType = state.ui.shapeType;
++     
++     // Find the stroke to determine its type
++     let targetStroke = null;
++     state.project.keyframes.forEach(kf => {
++         kf.layerStates.forEach(ls => {
++             const s = ls.strokes.find(s => s.id === strokeId);
++             if (s) targetStroke = s;
++         });
++     });
++     
++     if (targetStroke) {
++         if (targetStroke.shapeConfig) {
++             newTool = 'shape';
++             newShapeType = targetStroke.shapeConfig.type;
++         } else {
++             newTool = 'pen';
++         }
++     }
++
++     const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, state.ui.selectedKeyframeId, strokeId, state.ui.selectedTimelineKeyframeId);
++     return { ui: { ...state.ui, selectedStrokeId: strokeId, selectedTool: newTool, shapeType: newShapeType, ...hydratedProps } };
+   }),
+ 
+   addLayer: () => set((state) => {

@@ -1,0 +1,20 @@
+--- store/useStore.ts
++++ store/useStore.ts
+@@ -1750,7 +1750,7 @@
+       ui: { 
+         ...state.ui, 
+         selectedKeyframeId: targetKeyframeId,
+-        selectedStrokeId: strokeId,
++        selectedStrokeId: isCompLayer ? null : strokeId,
+         cornerRadii: config.cornerRadii || state.ui.cornerRadii,
+         ...(createdTlKeyframeId ? { selectedTimelineKeyframeId: createdTlKeyframeId, selectedLayerTrackId: selectedLayerId } : {})
+       },
+@@ -3189,7 +3189,7 @@
+       ui: { 
+         ...state.ui, 
+         selectedKeyframeId: targetKeyframeId, 
+-        selectedStrokeId: newStroke.id,
++        selectedStrokeId: isCompLayer ? null : newStroke.id,
+         ...(createdTlKeyframeId ? { selectedTimelineKeyframeId: createdTlKeyframeId, selectedLayerTrackId: selectedLayerId } : {})
+       },
+       history: { past, future: [] }

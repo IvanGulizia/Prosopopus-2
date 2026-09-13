@@ -1,0 +1,13 @@
+--- store/useStore.ts
++++ store/useStore.ts
+@@ -531,6 +531,9 @@
+   setTool: (tool) => set((state) => {
+       let newSelectedStrokeId = state.ui.selectedStrokeId;
+       
++      // Clear selected stroke if we switch to a drawing tool
++      if (tool === 'pen' || tool === 'polyline' || tool === 'shape') {
++          newSelectedStrokeId = null;
++      }
++
+       // Auto-select stroke if switching to a transform tool
+       if (tool === 'select' && state.ui.selectedLayerId && state.ui.selectedKeyframeId && !newSelectedStrokeId) {

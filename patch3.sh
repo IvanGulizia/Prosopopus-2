@@ -1,1 +1,0 @@
-sed -i 's/cornerRoundness: resolvedStyle.cornerRoundness ?? 0/cornerRoundness: resolvedStyle.cornerRoundness ?? 0,\n                cornerRadii: s?.shapeConfig?.cornerRadii || resolvedStyle.cornerRadii/g' components/Canvas.tsx

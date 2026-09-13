@@ -1,0 +1,18 @@
+--- store/useStore.ts
++++ store/useStore.ts
+@@ -2129,9 +2129,13 @@
+         const kf = state.project.keyframes.find(k => k.id === keyframeId);
+         if (kf) {
+             const ls = kf.layerStates.find(l => l.layerId === state.ui.selectedLayerId);
+-            if (ls && ls.strokes.length > 0) {
++            const layer = state.project.layers.find(l => l.id === state.ui.selectedLayerId);
++            
++            if (layer?.type === 'comp') {
+                 const sameStroke = ls.strokes.find(s => s.id === state.ui.selectedStrokeId);
+-                newSelectedStrokeId = sameStroke ? sameStroke.id : ls.strokes[0].id;
++                newSelectedStrokeId = sameStroke ? sameStroke.id : null;
++            } else if (ls && ls.strokes.length > 0) {
++                newSelectedStrokeId = ls.strokes[0].id;
+             } else {
+                 newSelectedStrokeId = null;
+             }

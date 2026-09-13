@@ -1,0 +1,25 @@
+--- components/Canvas.tsx
++++ components/Canvas.tsx
+@@ -1879,9 +1879,28 @@
+                    const resolvedStyle = resolveStrokeStyle(stroke, targetLayer);
+                    const cornerRoundness = resolvedStyle.cornerRoundness ?? 0;
+ 
+                    let isTargetStroke = false;
+                    if (targetLayer.type === 'comp' && isLayerActive && currentUI.compOnionTargetHighlight) {
+-                       isTargetStroke = (strokeIndex === currentNumStrokes);
++                       let activeTargetId = currentUI.selectedStrokeId;
++                       if (!activeTargetId) {
++                           // Find the first unfilled canonical slot for the current tool
++                           const canonicalSlots = new Set(targetLayer.strokes?.map(s => s.id) || []);
++                           const currentFilled = new Set(currentLs.strokes.filter(s => s.points.length > 0).map(s => s.id));
++                           for (const s of (targetLayer.strokes || [])) {
++                               if (!currentFilled.has(s.id)) {
++                                   if (currentUI.selectedTool === 'pen' && !s.shapeConfig) { activeTargetId = s.id; break; }
++                                   if (currentUI.selectedTool === 'shape' && s.shapeConfig?.type === currentUI.shapeType) { activeTargetId = s.id; break; }
++                               }
++                           }
++                       }
++                       isTargetStroke = (stroke.id === activeTargetId);
+                    }
+ 
+                    const layerSym = targetLayer?.symmetry?.enabled ? targetLayer.symmetry : (

@@ -1,0 +1,33 @@
+--- store/useStore.ts
++++ store/useStore.ts
+@@ -2479,6 +2479,30 @@
+     };
+   }),
+ 
++  clearStrokeInCurrentKeyframe: (layerId, strokeId) => set((state) => {
++      if (!state.ui.selectedKeyframeId) return state;
++      const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
++      
++      const newKeyframes = state.project.keyframes.map(kf => {
++          if (kf.id !== state.ui.selectedKeyframeId) return kf;
++          return {
++              ...kf,
++              layerStates: kf.layerStates.map(ls => {
++                  if (ls.layerId !== layerId) return ls;
++                  return {
++                      ...ls,
++                      strokes: ls.strokes.map(s => {
++                          if (s.id !== strokeId) return s;
++                          return { ...s, points: [] }; // Clear points to make it a hole
++                      })
++                  };
++              })
++          };
++      });
++      
++      return { history: { past, future: [] }, project: { ...state.project, keyframes: newKeyframes } };
++  }),
++
+   deleteStrokeFromLayer: (layerId, strokeId) => set((state) => {
+     const past = [...state.history.past, state.project].slice(-MAX_HISTORY);
+     const targetLayer = state.project.layers.find(l => l.id === layerId);

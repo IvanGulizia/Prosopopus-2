@@ -8,9 +8,12 @@
    - Spring dynamics, kinetic momentum extrapolation, and harmonic vertex inertia.
 2. **Calques Composites (Comp) & Sous-Calques Interpolés** :
    - Mode de calque multi-tracés (`type: 'comp'`) accumulant les traits et les formes.
+   - Synchronisation stricte par slots invariants : chaque sous-calque (tracé ou forme) conserve son identité (`stroke.id`) sur l'ensemble des poses.
+   - Création de slots vides automatiques (`points: []`) lors de l'ajout d'une forme ou d'un tracé dans un état sans impacter les tracés des autres poses.
+   - Bouton d'ajout de sous-calque explicite (`addCompSlot`).
    - Sous-calques ordonnés avec identifiants, index (`#1`, `#2`, ...), nommage inline et visibilité individuelle.
    - Volet accordéon escamotable fermé par défaut pour une ergonomie visuelle sans encombrement.
-   - Interpolation multi-vectorielle et réassignation de pose par état.
+   - Interpolation multi-vectorielle propre sans interpolation croisée parasite entre formes et traits distincts.
 3. **Expert Mode (Animation Timeline - Rive & Figma Motion Inspired)**:
    - Dedicated layer-by-layer tracks with clean graduation ruler and fluid scrubbing playhead.
    - Matrix 2D is automatically hidden when Timeline is open for total clarity.

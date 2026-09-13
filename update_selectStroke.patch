@@ -1,0 +1,35 @@
+--- store/useStore.ts
++++ store/useStore.ts
+@@ -2142,8 +2142,29 @@
+     return { ui: { ...state.ui, selectedLayerId: layerId, selectedStrokeId: null } };
+   }),
+ 
+-  selectStroke: (strokeId) => set((state) => {
+-     const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, state.ui.selectedKeyframeId, strokeId, state.ui.selectedTimelineKeyframeId);
+-     return { ui: { ...state.ui, selectedStrokeId: strokeId, ...hydratedProps } };
++  selectStroke: (strokeId) => set((state) => {
++     const hydratedProps = getHydratedUIProps(state.project, state.ui.selectedLayerId, state.ui.selectedKeyframeId, strokeId, state.ui.selectedTimelineKeyframeId);
++     let updatedUI = { ...state.ui, selectedStrokeId: strokeId, ...hydratedProps };
++     
++     // Q3a: Change tool automatically based on the selected stroke's config
++     if (strokeId && state.ui.selectedLayerId) {
++         const layer = state.project.layers.find(l => l.id === state.ui.selectedLayerId);
++         if (layer && layer.type === 'comp' && layer.canonicalSlots) {
++             const slot = layer.canonicalSlots.find(s => s.id === strokeId);
++             if (slot) {
++                 if (slot.shapeConfig) {
++                     updatedUI.selectedTool = 'shape';
++                     if (slot.shapeConfig.type === 'rectangle' || slot.shapeConfig.type === 'ellipse' || slot.shapeConfig.type === 'polygon') {
++                        updatedUI.shapeType = slot.shapeConfig.type;
++                     }
++                 } else {
++                     updatedUI.selectedTool = 'pen';
++                 }
++             }
++         }
++     }
++
++     return { ui: updatedUI };
+   }),
+ 
+   addLayer: () => set((state) => {
