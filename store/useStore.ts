@@ -1419,6 +1419,10 @@ export const useStore = create<StoreState>((set, get) => ({
     let targetKeyframeId = state.ui.selectedKeyframeId;
     let keyframes = [...state.project.keyframes];
     
+    if (targetKeyframeId && !keyframes.some(k => k.id === targetKeyframeId)) {
+        targetKeyframeId = null;
+    }
+    
     if (targetKeyframeId === null) {
       const newKfId = `kf-${Date.now()}`;
       const newKeyframe: Keyframe = {
@@ -2941,6 +2945,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
     let targetKeyframeId = state.ui.selectedKeyframeId;
     let keyframes = [...state.project.keyframes];
+    
+    if (targetKeyframeId && !keyframes.some(k => k.id === targetKeyframeId)) {
+        targetKeyframeId = null;
+    }
     
     if (targetKeyframeId === null) {
       const newKfId = `kf-${Date.now()}`;

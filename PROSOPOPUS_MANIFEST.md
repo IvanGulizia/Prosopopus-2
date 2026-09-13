@@ -1,6 +1,6 @@
 # PROSOPOPUS v2 - MANIFESTO & ARCHITECTURE
 
-> **Version**: 2.9.6 (No-Close Policy & Linear Topology)
+> **Version**: 2.9.7 (Matrix Onion Skin & Sub-layer Erase Fixes)
 > **Role**: Source of Truth & Project Memory
 > **Concept**: N-Dimensional Vector Interpolation Design Tool
 
@@ -155,10 +155,12 @@ Ces fonctionnalités constituent le cœur de l'expérience utilisateur et ne doi
 *   **Global Property Updates** : Les modifications de couleur et de taille via l'UI s'appliquent au calque et à l'état courant même si aucun tracé n'est explicitement sélectionné.
 
 ### Matrice & Navigation
-*   **AxisMap**: Visualisation 2D de l'espace des états. Les points indiquent visuellement s'ils contiennent des données pour le calque actif (noir) ou pour d'autres calques (gris).
+*   **AxisMap**: Visualisation 2D de l'espace des états. Les points (Keyframes) sont masqués sauf s'ils contiennent des données pour le calque actuellement sélectionné (ou s'ils sont le point actif), réduisant ainsi le bruit visuel.
 *   **Snap Matrix**: Grille magnétique paramétrable pour l'axe X/Y.
-*   **Strict Selection**: Un Keyframe n'est éditable que si l'on est *exactement* dessus. La sélection d'un Keyframe auto-sélectionne le tracé correspondant si le mode Transform est actif.
+*   **Strict Selection**: Un Keyframe n'est éditable que si l'on est *exactement* dessus. Un garde-fou robuste annule la cible (targetKeyframeId) si un état clé est supprimé via l'historique (Undo).
 *   **Drag & Drop Keyframes** : Déplacement direct des états clés sur la carte pour réorganiser l'espace d'interpolation.
+*   **Matrix Onion Skin (Ghost Strokes)** : Lorsqu'un sous-calque composite cible un "état à dessiner", les tracés fantômes sont rendus en gris clair avec un liseré plus épais. Le tracé actif visé par la sélection (le prochain remplacement) est signalé de manière proéminente en orange translucide avec pointillés.
+*   **Sub-layer Erasure** : Chaque sous-calque d'un calque Composite dispose d'un bouton Gomme (efface l'état local du keyframe courant sans détruire la géométrie des autres dimensions) et d'un bouton Poubelle (supprime le sous-calque de tous les états simultanément).
 
 ---
 

@@ -240,8 +240,12 @@ export const AxisMap: React.FC = () => {
             const isSelected = ui.selectedKeyframeId === kf.id;
             const isDragging = draggingKfId === kf.id;
             
-            const hasDataForCurrentLayer = kf.layerStates.some(ls => ls.layerId === ui.selectedLayerId && ls.strokes.length > 0);
+            const hasDataForCurrentLayer = kf.layerStates.some(ls => ls.layerId === ui.selectedLayerId && ls.strokes.some(s => s.points && s.points.length > 0));
             const hasDataForAnyLayer = kf.layerStates.some(ls => ls.strokes.length > 0);
+            
+            if (!hasDataForCurrentLayer && !isSelected) {
+                return null;
+            }
             
             return (
               <div
