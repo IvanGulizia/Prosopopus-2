@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.9.8] - Stabilisation de l'Inertie Topologique & Configuration du Lissage par Défaut
+
+### Changed
+- **Lissage Automatique désactivé par défaut** :
+  - `smoothingEnabled` est désormais configuré sur `false` à l'initialisation (`constants.ts`), préservant les points bruts et le tracé naturel lors de la création de nouveaux tracés, tout en restant activable manuellement à la demande via les réglages.
+
+### Fixed
+- **Stabilisation du Vertex Inertia Snap** :
+  - Élimination du filtre de poids strict sur `activeKeyframes` lors du packaging des données de tracé dans `Canvas.tsx`.
+  - Transmission complète des états disponibles à `interpolateStrokePoints`, garantissant une détection topologique exacte et un nombre de points constant lors du passage précis sur un keyframe simple.
+
+
 ## [2.6.1] - Synchronisation Précise des Slots en Mode Comp & Interpolation Multi-Formes
 
 ### Fixed

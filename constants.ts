@@ -201,7 +201,7 @@ export const INITIAL_UI_STATE: UIState = {
 
   gridSize: 40, 
   
-  smoothingEnabled: true, // Smoothing toggle
+  smoothingEnabled: false, // Smoothing toggle (disabled by default)
   strokeSmoothingFactor: 0.2, // 0 to 1 (0 = Raw/Detailed points, 1 = Heavy smoothing)
   onionSkinEnabled: true, // Enabled by default as requested
   guideOnionSkinEnabled: true, // Enabled by default as requested
