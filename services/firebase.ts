@@ -83,7 +83,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 // Database & Auth
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app);
 export const auth = getAuth(app);
 
 // Connection test

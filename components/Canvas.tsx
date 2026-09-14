@@ -11,110 +11,10 @@ import { APP_COLORS } from '../constants';
 
 type InteractionMode = 'none' | 'drawing' | 'polyline' | 'drawingShape' | 'dragging' | 'resizing' | 'rotating' | 'draggingVertex' | 'draggingCorner' | 'draggingCollider';
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br';
+import { isPointInsidePolygon, getGizmoHit, getCornerGizmoHit, getVertexHit, findHitStrokeAcrossLayers, findHitStroke } from '../utils/hitTest';
+import { resolveLayerVisibleStrokes, resolveActiveVisibleStroke } from '../utils/layerUtils';
 type CornerHandle = keyof CornerRadii;
 
-export const isPointInsidePolygon = (p: Point, points: Point[]): boolean => {
-  if (!points || points.length < 3) return false;
-  let inside = false;
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const xi = points[i].x, yi = points[i].y;
-    const xj = points[j].x, yj = points[j].y;
-    const intersect = ((yi > p.y) !== (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-};
-
-export const resolveLayerVisibleStrokes = (proj: Project, u: UIState, layerId: string): Stroke[] => {
-  const layer = proj.layers.find(l => l.id === layerId);
-  if (!layer || !layer.visible) return [];
-
-  if (layer.isGuide) {
-    const layerRelevantKeyframes = proj.keyframes.filter(kf => {
-      const ls = kf.layerStates.find(s => s.layerId === layer.id);
-      return ls && ls.strokes.length > 0;
-    });
-
-    if (u.mode === 'play' && layerRelevantKeyframes.length > 0) {
-      // Find the currently active state in play mode based on global currentAxesDict
-      // This is a helper inside the getCurrentLayerStrokes hook.
-      // `proj.axes` holds the values. But we don't have access to the physics-smoothed playMode axes here easily,
-      // so we use the raw proj.axes for the thumbnail extraction in the layers panel.
-      const currentAxesDict: Record<string, number> = {};
-      proj.axes.forEach(a => { currentAxesDict[a.id] = a.currentValue; });
-      const weights = calculateInterpolationWeights(
-        currentAxesDict,
-        layerRelevantKeyframes,
-        u.interpolationExponent,
-        u.interpolationStrategy,
-        false,
-        0,
-        u.gridCurvature ?? 1.0
-      );
-      let maxWeight = -Infinity;
-      let nearestKfId = '';
-      for (const [kfId, weight] of Object.entries(weights)) {
-        if (weight > maxWeight) {
-          maxWeight = weight;
-          nearestKfId = kfId;
-        }
-      }
-      const nearestKf = layerRelevantKeyframes.find(k => k.id === nearestKfId);
-      const kfStrokes = nearestKf?.layerStates.find(ls => ls.layerId === layer.id)?.strokes;
-      if (kfStrokes && kfStrokes.length > 0) return kfStrokes;
-    } else {
-      const selectedKf = proj.keyframes.find(k => k.id === u.selectedKeyframeId) || proj.keyframes[0];
-      const kfStrokes = selectedKf?.layerStates.find(ls => ls.layerId === layer.id)?.strokes;
-      if (kfStrokes && kfStrokes.length > 0) return kfStrokes;
-    }
-
-    return (layer.guideStrokes && layer.guideStrokes.length > 0)
-      ? layer.guideStrokes
-      : (proj.keyframes[0]?.layerStates.find(ls => ls.layerId === layer.id)?.strokes || []);
-  }
-
-  const isTimelineDriving = layer.driverMode === 'timeline' || u.isTimelineOpen;
-  if (isTimelineDriving) {
-    const activeAnim = proj.animations?.find(a => a.id === (u.activeAnimationId || proj.activeAnimationId)) || proj.animations?.[0];
-    const track = activeAnim?.tracks?.find(t => t.layerId === layer.id);
-    if (track && track.keyframes && track.keyframes.length > 0) {
-      if (u.selectedTimelineKeyframeId) {
-        const matchKf = track.keyframes.find(k => k.id === u.selectedTimelineKeyframeId);
-        if (matchKf && matchKf.strokes && matchKf.strokes.length > 0) {
-          return matchKf.strokes;
-        }
-      }
-      const tTime = u.timelineCurrentTime ?? 0;
-      const matchTimeKf = track.keyframes.find(k => Math.abs(k.time - tTime) <= 0.03);
-      if (matchTimeKf && matchTimeKf.strokes && matchTimeKf.strokes.length > 0) {
-        return matchTimeKf.strokes;
-      }
-      return evaluateLayerTimelineStrokes(
-        track,
-        tTime,
-        layer.interpolationMode || 'resample',
-        200,
-        activeAnim?.loopMode || 'loop',
-        activeAnim?.duration || 2.0,
-        layer
-      );
-    }
-  }
-
-  if (u.selectedKeyframeId) {
-    const kf = proj.keyframes.find(k => k.id === u.selectedKeyframeId);
-    const ls = kf?.layerStates.find(s => s.layerId === layer.id);
-    return ls?.strokes || [];
-  }
-
-  return [];
-};
-
-export const resolveActiveVisibleStroke = (proj: Project, u: UIState): Stroke | undefined => {
-  if (!u.selectedStrokeId || !u.selectedLayerId) return undefined;
-  const strokes = resolveLayerVisibleStrokes(proj, u, u.selectedLayerId);
-  return strokes.find(s => s.id === u.selectedStrokeId);
-};
 
 export const Canvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -539,71 +439,6 @@ export const Canvas: React.FC = () => {
     });
   }, [ui.selectedStrokeId, ui.selectedKeyframeId, ui.selectedTimelineKeyframeId, ui.timelineCurrentTime, ui.isTimelineOpen, ui.selectedLayerId, ui.selectedTool, project]);
 
-  const getGizmoHit = (p: Point, bounds: { cx: number, cy: number, width: number, height: number, rotation: number } | null) => {
-      if (!bounds) return null;
-      const { cx, cy, width, height, rotation } = bounds;
-      const hw = width / 2; const hh = height / 2;
-      const localP = rotatePoint(p, {x: cx, y: cy}, -rotation);
-      const HANDLE_SIZE = 12 / scale;
-      if (distance(localP, {x: cx, y: cy - hh - 25}) < HANDLE_SIZE) return 'rotator';
-      if (distance(localP, {x: cx - hw, y: cy - hh}) < HANDLE_SIZE) return 'tl';
-      if (distance(localP, {x: cx + hw, y: cy - hh}) < HANDLE_SIZE) return 'tr';
-      if (distance(localP, {x: cx - hw, y: cy + hh}) < HANDLE_SIZE) return 'bl';
-      if (distance(localP, {x: cx + hw, y: cy + hh}) < HANDLE_SIZE) return 'br';
-      if (localP.x >= cx - hw && localP.x <= cx + hw && localP.y >= cy - hh && localP.y <= cy + hh) return 'body';
-      return null;
-  };
-
-  const getCornerGizmoHit = (p: Point, bounds: { cx: number, cy: number, width: number, height: number, rotation: number } | null, radii?: CornerRadii): CornerHandle | null => {
-      if (!bounds) return null;
-      const minX = bounds.cx - bounds.width / 2;
-      const minY = bounds.cy - bounds.height / 2;
-      const handles = getCornerHandlePositions(
-        { minX, minY, width: bounds.width, height: bounds.height, rotation: bounds.rotation },
-        radii || { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 }
-      );
-      const HIT_RADIUS = 10 / scale;
-      for (const h of handles) {
-        if (distance(p, { x: h.x, y: h.y }) <= HIT_RADIUS) {
-          return h.corner;
-        }
-      }
-      return null;
-  };
-
-  const getVertexHit = (p: Point, strokePoints: Point[]): number => {
-      const HIT_THRESHOLD = 8 / scale;
-      for (let i = strokePoints.length - 1; i >= 0; i--) {
-          if (distance(p, strokePoints[i]) < HIT_THRESHOLD) return i;
-      }
-      return -1;
-  };
-
-  // Active Layer Selection: Only allow selecting strokes that are visible on the active layer
-  const findHitStrokeAcrossLayers = (p: Point): { strokeId: string; layerId: string } | null => {
-     const activeLayerId = ui.selectedLayerId;
-     if (!activeLayerId) return null;
-
-     const layer = project.layers.find(l => l.id === activeLayerId && !l.id.includes('-sym-') && l.visible && !l.locked);
-     if (!layer) return null;
-
-     const strokes = resolveLayerVisibleStrokes(project, ui, activeLayerId);
-     for (let i = strokes.length - 1; i >= 0; i--) {
-        const s = strokes[i];
-        if (s.visible === false) continue;
-        if (!s.points || s.points.length === 0) continue;
-        const isHit = isPointInStroke(p, s.points) || ((s.closed || s.shapeConfig || (s.style?.fillColor && s.style?.fillColor !== 'none')) && isPointInsidePolygon(p, s.points));
-        if (isHit) {
-           return { strokeId: s.id, layerId: layer.id };
-        }
-     }
-     return null;
-  };
-
-  const findHitStroke = (p: Point): string | null => {
-     const hit = findHitStrokeAcrossLayers(p);
-     return hit ? hit.strokeId : null;
-  };
 
   const triggerStateMachineEvent = (event: {
     type: string;
@@ -838,7 +673,7 @@ export const Canvas: React.FC = () => {
             
             if (isRectangleShape) {
                 const strokeRadii = stroke?.shapeConfig?.cornerRadii || stroke?.style?.cornerRadii || ui.cornerRadii;
-                const hitCorner = getCornerGizmoHit(p, selectionBounds, strokeRadii);
+                const hitCorner = getCornerGizmoHit(p, selectionBounds, strokeRadii, scale);
                 if (hitCorner) {
                     setInteractionMode('draggingCorner');
                     setActiveCornerHandle(hitCorner);
@@ -860,7 +695,7 @@ export const Canvas: React.FC = () => {
              const stroke = resolveActiveVisibleStroke(project, ui);
              
              if (stroke) {
-                 const vertexIndex = getVertexHit(p, stroke.points);
+                 const vertexIndex = getVertexHit(p, stroke.points, scale);
                  
                  if (e.button === 2) { // Right click
                      if (vertexIndex !== -1 && stroke.points.length > 2) {
@@ -885,7 +720,7 @@ export const Canvas: React.FC = () => {
                      return;
                  } else {
                      // Check if hit stroke body to add point
-                     const hitStrokeId = findHitStroke(p);
+                     const hitStrokeId = findHitStroke(p, project, ui);
                      if (hitStrokeId === ui.selectedStrokeId) {
                          let minDistance = Infinity;
                          let insertIndex = -1;
@@ -918,7 +753,7 @@ export const Canvas: React.FC = () => {
         }
 
         if (!isVertexMode && ui.selectedStrokeId && selectionBounds) {
-            const hitGizmo = getGizmoHit(p, selectionBounds);
+            const hitGizmo = getGizmoHit(p, selectionBounds, scale);
             if (hitGizmo) {
                 const stroke = resolveActiveVisibleStroke(project, ui);
                 if (stroke) {
@@ -936,7 +771,7 @@ export const Canvas: React.FC = () => {
         }
 
         // Direct Hit Testing across layers
-        const hit = findHitStrokeAcrossLayers(p);
+        const hit = findHitStrokeAcrossLayers(p, project, ui);
         if (hit) {
              if (hit.layerId !== ui.selectedLayerId) {
                  selectLayer(hit.layerId);
@@ -2436,8 +2271,7 @@ export const Canvas: React.FC = () => {
           );
 
           const activeKeyframes = strokeRelevantKeyframes
-               .map(k => ({ ...k, weight: weights[k.id] || 0 }))
-               .filter(k => Math.abs(k.weight) > 0.0001);
+               .map(k => ({ ...k, weight: weights[k.id] || 0 }));
           // In Edit Mode with a selected keyframe:
           // Check if this stroke has drawn points in the current keyframe.
           let isGhostStroke = false;
@@ -3123,7 +2957,7 @@ export const Canvas: React.FC = () => {
                 const p = getCanvasPoint(e as any);
                 if (ui.selectedTool === 'select' && isVertexMode && ui.selectedStrokeId) {
                     const stroke = resolveActiveVisibleStroke(project, ui);
-                    if (stroke && getVertexHit(p, stroke.points) !== -1) {
+                    if (stroke && getVertexHit(p, stroke.points, scale) !== -1) {
                         return;
                     }
                 }

@@ -498,12 +498,17 @@ export const interpolateStrokePoints = (
     bottomLeft: totalBL / widthWeightDivisor
   } : undefined;
 
+  // Stability Fix: Calculate maxPts across all available keyframes (even those with weight 0) 
+  // to prevent the target point count from changing dynamically when a keyframe is excluded 
+  // due to weight thresholding. This keeps the topology size perfectly stable and prevents vertex inertia snaps.
+  const allStrokesWithPoints = keyframesData.filter(k => k.points && k.points.length > 0);
+
   // 3. Point Count Calculation & Isomorphic Topology Check
   const firstLen = activeKeyframes[0].points!.length;
-  const allSameLength = activeKeyframes.every(k => k.points!.length === firstLen);
+  const globalSameLength = allStrokesWithPoints.every(k => k.points!.length === firstLen);
 
   // If all keyframes share low-poly topology (<= 16 points, like rectangles, triangles, polygons) or mode is 'points':
-  if (allSameLength && (firstLen <= 16 || mode === 'points')) {
+  if (globalSameLength && (firstLen <= 16 || mode === 'points')) {
     const resultPoints: Point[] = [];
     for (let i = 0; i < firstLen; i++) {
       let x = 0;
@@ -544,10 +549,6 @@ export const interpolateStrokePoints = (
   }
 
   let ACTUAL_TARGET_COUNT = targetCount; 
-  // Stability Fix: Calculate maxPts across all available keyframes (even those with weight 0) 
-  // to prevent the target point count from changing dynamically when a keyframe is excluded 
-  // due to weight thresholding. This keeps the topology size perfectly stable and prevents vertex inertia snaps.
-  const allStrokesWithPoints = keyframesData.filter(k => k.points && k.points.length > 0);
   const maxPts = allStrokesWithPoints.length > 0 
     ? Math.max(...allStrokesWithPoints.map(k => k.points!.length))
     : (activeKeyframes.length > 0 ? Math.max(...activeKeyframes.map(k => k.points!.length)) : 0);
